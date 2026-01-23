@@ -268,46 +268,6 @@ int main()
 
 //    uint8_t writeENState = 0;
     while (true) {
-        // Toggle GPIO2 at start of loop - shows loop is running
-        //gpio_put(2, !gpio_get(2));
-/*        
-        if (writeENState != g_floppy->isWriteEnabled()) {
-            writeENState = g_floppy->isWriteEnabled();
-            if (writeENState) {
-                g_floppy->startWritingProcedure();
-                printf("WRITE_EN START\r\n");
-            } else {
-                printf("WRITE_EN END\r\n");
-                g_floppy->stopWritingProcedure();
-            }
-        }
-*/
-        // Process floppy emulator - MUST be called always for stepper motor tracking
-        // processStepperMotor() runs in process() and must work continuously
-/*
-        } else {
-            g_floppy->initWriteIRQTimer();
-            g_floppy->startWriteIRQTimer();
-
-            uint8_t magstate = g_floppy->floppy_write_in();
-      
-            do
-            {
-              uint8_t new_magstate = g_floppy->floppy_write_in();
-              if (magstate != new_magstate)
-              {
-                g_floppy->writePinChange();
-                magstate = new_magstate;
-              }
-              if (TCD0.INTFLAGS & TC0_OVFIF_bm)
-              {
-                g_floppy->writeIdle();
-              }
-            } while (g_floppy->isWriteEnabled());
-      
-            end_writing();
-          }            
-*/            
       
         // CRITICAL: During write operation, use tight polling loop
         // Write timing is critical - based on AVR write loop implementation

@@ -21,6 +21,7 @@ static PIO g_writeIrqTimerPio = nullptr;
 
 static uint slice_num;
 
+/*
 // PWM IRQ handler for write timer (4μs period)
 void pwm_irq_handler() {
     pwm_clear_irq(slice_num);
@@ -36,7 +37,7 @@ void pwm_irq_handler() {
     g_floppyEmulatorInstance->handleWriteIRQTimer();
 }
 
-
+*/
 
 
 // GPIO IRQ handler for WRITE_EN and WRITE pins (reacts to both rising and falling edges)
@@ -60,20 +61,7 @@ void writeEnableIRQHandler(uint gpio, uint32_t events) {
     }
 }
 
-/*
-// IRQ handler for PIO IRQ timer (static wrapper)
-// CRITICAL: This runs in IRQ context - must be very fast!
-static void writeIRQTimerHandler() {
-    if (g_floppyEmulatorInstance && g_writeIrqTimerPio) {
-        // Clear IRQ flag FIRST (fast operation)
-        pio_interrupt_clear(g_writeIrqTimerPio, 0);
-        // Then call handler
-        g_floppyEmulatorInstance->handleWriteIRQTimer();
-    } else {
-        printf("ERROR: writeIRQTimerHandler() - g_floppyEmulatorInstance is null or g_writeIrqTimerPio is null\r\n");
-    }
-}
-    */
+
 // GCR encoding table: maps 5-bit data (0-31) to 6-bit GCR code
 // GCR rule: no more than 2 consecutive zeros
 static const uint8_t GCR_ENCODE_LOOKUP[32] = {
@@ -519,144 +507,7 @@ void FloppyEmulator::detectStepperPhaseChange() {
     }
 }
 
-/*
 
-    // Determine which phase is active (only one should be active at a time)
-    // Map phase state to phase number: 0b0001=PH0, 0b0010=PH1, 0b0100=PH2, 0b1000=PH3
-    static bool firstCall = true;
-    static StepperPhase oldPhase;
-    
-    // Initialize oldPhase with currentPhase on first call
-    if (firstCall) {
-        oldPhase = currentPhase;
-        firstCall = false;
-    }
-    
-    StepperPhase newPhase;
-    
-    if (stp_pos == 0b00000001) {
-        newPhase = STEPPER_PHASE_0;
-    } else if (stp_pos == 0b00000010) {
-        newPhase = STEPPER_PHASE_1;
-    } else if (stp_pos == 0b00000100) {
-        newPhase = STEPPER_PHASE_2;
-    } else if (stp_pos == 0b00001000) {
-        newPhase = STEPPER_PHASE_3;
-    } else {
-        // Invalid state (no phase or multiple phases) - keep current phase
-        return;
-    }
-    
-    // Only process if phase actually changed
-    if (newPhase != oldPhase) {
-        // Calculate direction: forward (outward) or backward (inward)
-        int phaseDiff = ((int)newPhase - (int)oldPhase + 4) % 4;
-        
-        if (phaseDiff == 1) {
-            // Moving forward (outward): PH0->PH1->PH2->PH3->PH0
-            // This increases track number (track 0 -> track 34)
-            currentStep++;
-            if (currentStep >= APPLE_II_STEPS_PER_TRACK) {
-                currentStep = 0;
-                if (currentTrack < APPLE_II_TRACKS - 1) {
-                    currentTrack++;
-                }
-            }
-        } else if (phaseDiff == 3) {
-            // Moving backward (inward): PH0->PH3->PH2->PH1->PH0
-            // This decreases track number (track 34 -> track 0)
-            currentStep--;
-            if (currentStep < 0) {
-                currentStep = APPLE_II_STEPS_PER_TRACK - 1;
-                if (currentTrack > 0) {
-                    currentTrack--;
-                }
-            }
-        }
-        // phaseDiff == 2 means skipped phase (invalid) - ignore
-        // phaseDiff == 0 means no change - shouldn't happen here
-        
-        // Update tracked phase
-        oldPhase = newPhase;
-        currentPhase = newPhase;
-    }
-*/
-
-
-/*
-// Update stepper position based on phase change
-void FloppyEmulator::updateStepperPosition() {
-    // Read new phase from controller
-    // Phases are active HIGH
-    // Find the first active phase (in case of dual-phase activation)
-    StepperPhase newPhase = currentPhase;
-    for (int i = 0; i < 4; i++) {
-        if (gpio_get(stepperPhasePins[i])) {  // Active when HIGH
-            newPhase = (StepperPhase)i;
-            break;
-        }
-    }
-    
-    // If phase didn't change, don't update position
-    if (newPhase == currentPhase) {
-        return;
-    }
-    
-    // Update position with current and new phase
-    updateStepperPositionWithPhases(currentPhase, newPhase);
-}
-
-// Update stepper position with explicit old and new phases
-void FloppyEmulator::updateStepperPositionWithPhases(StepperPhase oldPhase, StepperPhase newPhase) {
-    // Calculate direction
-    int oldPhaseInt = (int)oldPhase;
-    int newPhaseInt = (int)newPhase;
-    int phaseDiff = (newPhaseInt - oldPhaseInt + 4) % 4;
-    
-    // Determine direction based on phase difference
-    // Based on research:
-    // PH0 > PH1 > PH2 > PH3 > PH0 - increases track (outward, track 0 -> track 34)
-    // PH0 > PH3 > PH2 > PH1 > PH0 - decreases track (inward, track 34 -> track 0)
-    // phaseDiff == 1 means sequence PH0 > PH1 > PH2 > PH3 > PH0 (outward, increase track)
-    // phaseDiff == 3 means sequence PH0 > PH3 > PH2 > PH1 > PH0 (inward, decrease track)
-    // Each phase change is 1 step. 4 steps (full cycle) = 1 track movement
-    printf("phaseDiff: %d\r\n", phaseDiff);
-    if (phaseDiff == 1) {
-        // Moving forward (outward) - sequence PH0 > PH1 > PH2 > PH3 > PH0
-        // This increases track number (moves away from center, track 0 -> track 34)
-        currentStep++;
-        printf("currentStep: %d\r\n", currentStep);
-        if (currentStep >= APPLE_II_STEPS_PER_TRACK) {
-            currentStep = 0;
-            if (currentTrack < APPLE_II_TRACKS - 1) {
-                // Save GCR cache to disk image before changing track (if dirty)
-                saveGCRCacheToDiskImage();
-                currentTrack++;
-            }
-        }
-    } else if (phaseDiff == 3) {
-        // Moving backward (inward) - sequence PH0 > PH3 > PH2 > PH1 > PH0
-        // This decreases track number (moves toward center, track 34 -> track 0)
-        currentStep--;
-        printf("currentStep: %d\r\n", currentStep);
-        if (currentStep < 0) {
-            currentStep = APPLE_II_STEPS_PER_TRACK - 1;
-            if (currentTrack > 0) {
-                // Save GCR cache to disk image before changing track (if dirty)
-                saveGCRCacheToDiskImage();
-                currentTrack--;
-            }
-        }
-    } else if (phaseDiff == 2) {
-        // Invalid transition (skipped phase) - might be noise or error
-        // Ignore it - don't update position
-    } else if (phaseDiff == 0) {
-        // No change - shouldn't happen here, but handle gracefully
-        // Don't update position
-    }
-    //printf("currentTrack: %d, currentStep: %d\r\n", currentTrack, currentStep);
-}
-*/
 // Process stepper motor (monitor controller signals)
 void FloppyEmulator::processStepperMotor() {
     // Monitor phase changes from controller
@@ -1737,60 +1588,6 @@ void FloppyEmulator::initWritePWMTimer() {
     pwm_set_enabled(slice_num, true);
 }
 //================================================================================
-/*
-// Initialize PIO IRQ timer for write bit capture (4μs period)
-void FloppyEmulator::initWriteIRQTimer() {
-    // Claim a PIO instance and state machine (prefer different PIO from read PIO if possible)
-    if (pio == pio0) {
-        writeIrqTimerPio = pio1;  // Use different PIO if possible
-    } else {
-        writeIrqTimerPio = pio0;
-    }
-    
-    writeIrqTimerSm = pio_claim_unused_sm(writeIrqTimerPio, true);
-    if (writeIrqTimerSm < 0) {
-        // Try the other PIO if first choice is full
-        if (writeIrqTimerPio == pio0) {
-            writeIrqTimerPio = pio1;
-        } else {
-            writeIrqTimerPio = pio0;
-        }
-        writeIrqTimerSm = pio_claim_unused_sm(writeIrqTimerPio, true);
-        if (writeIrqTimerSm < 0) {
-            // No available state machine - this should not happen
-            printf("ERROR: initWriteIRQTimer() failed - no available PIO state machine!\r\n");
-            writeIrqTimerPio = nullptr;
-            return;
-        }
-    }
-    
-    // Load PIO program
-    writeIrqTimerOffset = pio_add_program(writeIrqTimerPio, &floppy_irq_timer_program);
-    
-    // Initialize PIO state machine (but DON'T start it yet - wait for startWriteIRQTimer())
-    floppy_irq_timer_program_init(writeIrqTimerPio, writeIrqTimerSm, writeIrqTimerOffset);
-    
-    // Configure PIO IRQ (IRQ 0) - enable and set handler
-    // Each PIO instance has its own IRQ: PIO0_IRQ_0 or PIO1_IRQ_0
-    pio_set_irq0_source_enabled(writeIrqTimerPio, (pio_interrupt_source)(PIO_INTR_SM0_LSB + writeIrqTimerSm), true);
-    
-    // Store PIO instance in static variable for fast IRQ handler access
-    g_writeIrqTimerPio = writeIrqTimerPio;
-    
-    if (writeIrqTimerPio == pio0) {
-        irq_set_exclusive_handler(PIO0_IRQ_0, writeIRQTimerHandler);
-        irq_set_priority(PIO0_IRQ_0, 0);
-        irq_set_enabled(PIO0_IRQ_0, true);
-    } else {
-        irq_set_exclusive_handler(PIO1_IRQ_0, writeIRQTimerHandler);
-        irq_set_priority(PIO1_IRQ_0, 0);
-        irq_set_enabled(PIO1_IRQ_0, true);
-    }
-    writeIrqTimerActive = true;
-    stopWritePWMTimer();
-    writeIrqTimerActive = false;
-}
-    */
 //================================================================================
 //================================================================================
 // Start PWM timer (called when write operation starts)
@@ -1834,42 +1631,6 @@ bool FloppyEmulator::checkPWMOverflow() {
     return false;
 }
 //-----------------------------------------------
-
-/*
-// Start PIO IRQ timer (called when write operation starts)
-void FloppyEmulator::startWriteIRQTimer() {
-    if (writeIrqTimerActive || writeIrqTimerPio == nullptr) {
-        //gpio_put(2, !gpio_get(2));
-        return;  // Already active or not initialized
-    }
-    //if (writeIrqTimerActive) stopWriteIRQTimer();
-    // Start PIO state machine
-    //sleep_us(1);
-    pio_interrupt_clear(g_writeIrqTimerPio, 0);
-    pio_sm_set_enabled(writeIrqTimerPio, writeIrqTimerSm, true);
-    writeIrqTimerActive = true;
-}
-
-// Stop PIO IRQ timer (called when write operation ends)
-void FloppyEmulator::stopWriteIRQTimer() {
-    if (!writeIrqTimerActive || writeIrqTimerPio == nullptr) {
-        return;  // Not active or not initialized
-    }
-    // Stop PIO state machine
-    pio_sm_set_enabled(writeIrqTimerPio, writeIrqTimerSm, false);
-    writeIrqTimerActive = false;
-}
-
-// Reset X register to 19 in PIO IRQ timer (equivalent to TCD0.CNT = 0x0000 in AVR code)
-void FloppyEmulator::resetWriteIRQTimerX() {
-    // Execute "set x, 19" instruction in PIO state machine
-    // This initializes/resets the X counter register to 19
-    //pio_sm_exec(writeIrqTimerPio, writeIrqTimerSm, pio_encode_set(pio_x, 16));
-    pio_interrupt_clear(g_writeIrqTimerPio, 0);
-    pio_sm_restart(writeIrqTimerPio, writeIrqTimerSm);
-    pio_sm_clkdiv_restart(writeIrqTimerPio, writeIrqTimerSm);
-}
-    */
 //-----------------------------------------------
 bool FloppyEmulator::floppy_write_in() {
     return gpio_get(writePin) ? 1 : 0;
@@ -2102,6 +1863,7 @@ void FloppyEmulator::handleWriteIRQ(uint32_t events) {
     (void)events;  // Suppress unused variable warning
 }
 //..................................................................................................................................................
+/*
 // Handle PIO IRQ timer interrupt (called from IRQ handler)
 // CRITICAL: This function runs in IRQ context - keep it FAST!
 // This is called every 4μs to capture bits from WRITE pin during write operation
@@ -2156,6 +1918,7 @@ void FloppyEmulator::handleWriteIRQTimer() {
     uint32_t gcrBitsPerTrack = APPLE_II_GCR_BYTES_PER_TRACK * 8;
     rotationPosition = (rotationPosition + 1) % gcrBitsPerTrack;
 }
+*/
 //..................................................................................................................................................
 
 

@@ -1,0 +1,11 @@
+// Stub header for clangd - Pico SDK doesn't use standard C++ assert
+// This file exists only to satisfy clangd's include resolution
+#ifndef CASSERT_STUB
+#define CASSERT_STUB
+
+// Empty stub - assert functionality is not available in embedded environment
+#define assert(expr) ((void)0)
+
+#endif // CASSERT_STUB
+
+

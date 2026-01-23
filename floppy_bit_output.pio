@@ -1,0 +1,58 @@
+; PIO program to generate pulses for Apple II floppy emulation  
+; Bit "1": 1μs HIGH, 3μs LOW (total 4μs)
+; Bit "0": 4μs LOW
+; Clock: 2MHz (1 instruction = 0.5μs)
+; Strategy: Use out pins, 1 to output bit, then set pins, 0 after 1μs
+; For bit=1: out sets HIGH (0.5μs), wait 0.5μs (HIGH total 1μs), set LOW, wait 2μs (LOW total 3μs)
+; For bit=0: out sets LOW (0.5μs), wait 0.5μs, set LOW, wait 2μs (LOW total 3μs)
+; Note: Changed nop [4] to nop [3] to fix LOW timing (was 3.5μs, now 3μs)
+
+.program floppy_bit_output
+
+.wrap_target
+start:
+    pull            ; Get 8 bits from FIFO into OSR
+    set x, 7        ; Process 8 bits (counter: 7, 6, 5, ..., 0)
+    
+bit_loop:
+    ; Output MSB of OSR to pins (bit value: 0 or 1)
+    out pins, 1     ; Shift 1 bit from OSR to pins (sets pin to 0 or 1)
+    
+    ; Wait 0.5μs (at 2MHz, 1 cycle = 0.5μs)
+    ; For bit=1: pin is HIGH during this wait (total HIGH = 1μs)
+    ; For bit=0: pin is LOW during this wait
+    nop
+    
+    ; Set pin LOW (for bit=1: ends HIGH pulse, for bit=0: stays LOW)
+    set pins, 0
+    
+    ; Wait 2.5μs more (both cases: LOW for remaining time)
+    ; Total LOW should be 3μs: set pins,0 (0.5μs) + wait (2.5μs) = 3μs
+    ; But measured LOW is 3.5μs, so reduce wait by 0.5μs (1 cycle)
+    ; Change from nop [4] (5 cycles = 2.5μs) to nop [3] (4 cycles = 2μs)
+    nop [3]         ; Wait 4 cycles = 2μs at 2MHz (reduced from 5 cycles to fix timing)
+    
+    jmp x-- bit_loop ; Decrement x, continue if not zero
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void floppy_bit_output_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = floppy_bit_output_program_get_default_config(offset);
+    
+    sm_config_set_out_pins(&c, pin, 1);
+    sm_config_set_set_pins(&c, pin, 1);
+    sm_config_set_out_shift(&c, false, true, 8);
+    
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    
+    float div = (float)clock_get_hz(clk_sys) / 2000000.0f;
+    sm_config_set_clkdiv(&c, div);
+    
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
+

@@ -1,0 +1,11 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -isystem/home/CurrentProjects/PRAVETZ-8D/PROJECT_P8D_V5.2/APPLE_II_FLOPPY_EMU_PICO_V2/FLOPPY_APPLE_II_PICO/.clangd_stubs
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+
+Index:
+  Background: Build

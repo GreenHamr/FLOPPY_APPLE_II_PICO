@@ -1,0 +1,33 @@
+; PIO program to generate IRQ every 4μs
+; Clock: 5MHz (200MHz / 40 = 5MHz, 1 cycle = 0.2μs)
+; 4μs = 20 cycles at 5MHz
+; Strategy: Use X register as counter, decrement until 0, then generate IRQ
+
+.program floppy_irq_timer
+
+.wrap_target
+start:
+    set x, 16           ; Initialize counter to 19 (for 20 cycles total: 1 + 19)
+loop:
+    jmp x--, loop       ; Decrement X, jump to loop if X != 0 (2 cycles when jumping, 1 cycle when X reaches 0)
+    ; X reached 0 - generate IRQ and reset counter
+    set x, 16           ; Reset counter to 19 (1 cycle) - total loop = 20 cycles = 4μs at 5MHz
+    irq 0               ; Generate IRQ 0 (1 cycle)
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void floppy_irq_timer_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = floppy_irq_timer_program_get_default_config(offset);
+    
+    // Clock divider: 200MHz / 2.5MHz = 80
+    // At 2.5MHz: 1 cycle = 0.4μs, 10 cycles = 4μs (perfect for 4μs period)
+    float div = (float)clock_get_hz(clk_sys) / 4998000.0f;    // 4998000.0f;
+    sm_config_set_clkdiv(&c, div);
+    
+    // No pins needed - this is just a timer
+    pio_sm_init(pio, sm, offset, &c);
+    // Don't start yet - will be started via startWriteIRQTimer()
+}
+%}

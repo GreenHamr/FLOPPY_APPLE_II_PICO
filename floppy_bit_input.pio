@@ -1,0 +1,51 @@
+; PIO program to read bits from WRITE pin for Apple II floppy write emulation
+; Bit period: 4μs (one bit every 4μs = 125 kbps)
+; Clock: 250kHz (1 instruction = 4μs, since 200MHz / 250kHz = 800)
+; Strategy: Sample pin state every 4μs, detect transitions (flux changes)
+; Flux transition (pin change) = bit "1"
+; No transition (no change) = bit "0"
+;
+; Note: We can't directly detect transitions in PIO easily, so we'll:
+; Option 1: Sample pin every 4μs and push to FIFO, detect transitions in CPU
+; Option 2: Use JMP pin instruction to detect transitions (but needs setup)
+; For now, use Option 1: sample and push to FIFO, CPU will detect transitions
+
+.program floppy_bit_input
+
+.wrap_target
+start:
+    ; Read pin state (0 or 1) into ISR
+    ; At 2.5MHz: 1 cycle = 0.4μs, 10 cycles = 4μs
+    in pins, 1        ; Read 1 bit from pin into ISR (shifts left, 1 cycle)
+    
+    ; Wait 9 cycles to complete 4μs bit period (10 cycles total = 4μs at 2.5MHz)
+    ; nop [8] = 9 cycles (8+1 = 9 cycles)
+    nop [8]           ; Wait 9 cycles (total = 10 cycles = 4μs)
+    
+    ; After 8 bits collected in ISR, autopush will push to FIFO
+    ; (autopush is configured to push after 8 bits via sm_config_set_in_shift)
+    
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void floppy_bit_input_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = floppy_bit_input_program_get_default_config(offset);
+    
+    // Configure input pin
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_in_shift(&c, false, true, 8);  // Shift left, autopush after 8 bits
+    
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);  // Set as input
+    
+    // Clock divider: 200MHz / 2.5MHz = 80
+    // At 2.5MHz: 1 cycle = 0.4μs, 10 cycles = 4μs (perfect for 4μs bit period)
+    float div = (float)clock_get_hz(clk_sys) / 2500000.0f;
+    sm_config_set_clkdiv(&c, div);
+    
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, false);  // Don't start yet - wait for WRITE_EN falling edge
+}
+%}

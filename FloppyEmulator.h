@@ -56,6 +56,9 @@ typedef enum {
     STEPPER_DIR_OUTWARD = 1    // Move away from track 0
 } StepperDirection;
 
+// Forward declaration
+class SDCardManager;
+
 class FloppyEmulator {
 private:
     // RAW disk image storage (linear array)
@@ -117,6 +120,10 @@ private:
     int gcrTrackCacheTrack;         // Track number for which cache is valid (-1 = invalid)
     uint32_t gcrTrackCacheBits;     // Number of GCR bits in cache (48 bits per 5-byte group)
     bool gcrTrackCacheDirty;        // True if GCR cache has been modified (needs to be saved before track change)
+    
+    // SD card and file management
+    SDCardManager* sdCardManager;    // Pointer to SD card manager (for saving tracks to file)
+    char currentFileName[64];        // Current disk image filename (for saving tracks)
     
     // PIO/DMA for continuous bit output
     PIO pio;                        // PIO instance (pio0 or pio1)
@@ -239,6 +246,10 @@ public:
     // Status
     bool isDriveSelected() const;  // Check if this drive is selected by controller
     bool isWriteEnabled() const;
+    
+    // SD card and file management
+    void setSDCardManager(SDCardManager* sdCard);  // Set SD card manager for saving tracks
+    void setCurrentFileName(const char* filename);  // Set current disk image filename
 };
 
 #endif // FLOPPY_EMULATOR_H

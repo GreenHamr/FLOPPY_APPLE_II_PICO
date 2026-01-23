@@ -73,6 +73,7 @@ public:
     
     // Disk image loading
     bool loadDiskImage(const char* filename, uint8_t* buffer, uint32_t bufferSize, uint32_t* bytesRead);
+    bool saveTrackToFile(const char* filename, int track, const uint8_t* trackData, uint32_t trackSize);
     
     // FAT32 access
     FAT32* getFAT32() const;

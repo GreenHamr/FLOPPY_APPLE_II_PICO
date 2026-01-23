@@ -1,4 +1,5 @@
 #include "FloppyEmulator.h"
+#include "SDCardManager.h"
 #include "hardware/gpio.h"
 #include "hardware/sync.h"
 #include "hardware/irq.h"
@@ -208,6 +209,10 @@ FloppyEmulator::FloppyEmulator(
     gcrTrackCacheTrack = -1;  // Cache invalid initially
     gcrTrackCacheBits = 0;
     gcrTrackCacheDirty = false;  // Cache is clean initially
+    
+    // Initialize SD card and file management
+    sdCardManager = nullptr;
+    memset(currentFileName, 0, sizeof(currentFileName));
     
     // Clear disk image
     clearDiskImage();
@@ -1014,6 +1019,21 @@ bool FloppyEmulator::isWriteEnabled() const {
     return gpio_get(writeEnablePin) == 0;
 }
 
+// Set SD card manager for saving tracks
+void FloppyEmulator::setSDCardManager(SDCardManager* sdCard) {
+    sdCardManager = sdCard;
+}
+
+// Set current disk image filename
+void FloppyEmulator::setCurrentFileName(const char* filename) {
+    if (filename) {
+        strncpy(currentFileName, filename, sizeof(currentFileName) - 1);
+        currentFileName[sizeof(currentFileName) - 1] = 0;
+    } else {
+        currentFileName[0] = 0;
+    }
+}
+
 // Timer callback function for precise bit timing
 // This is called every 8 microseconds when timer is active
 bool bitTimerCallback(repeating_timer_t *rt) {
@@ -1324,6 +1344,19 @@ void FloppyEmulator::saveGCRCacheToDiskImage() {
     
     printf("saveGCRCacheToDiskImage: Track %d - %d sectors decoded, %d skipped\r\n", 
            gcrTrackCacheTrack, sectorsDecoded, sectorsSkipped);
+    
+    // Save track to SD card file if SD card manager and filename are available
+    if (sdCardManager && currentFileName[0] != 0 && sectorsDecoded > 0) {
+        // Get track data from diskImage (already decoded and written above)
+        uint8_t* trackData = &diskImage[trackOffset];
+        uint32_t trackSize = APPLE_II_BYTES_PER_TRACK;  // 4096 bytes per track
+        
+        if (sdCardManager->saveTrackToFile(currentFileName, gcrTrackCacheTrack, trackData, trackSize)) {
+            printf("saveGCRCacheToDiskImage: Track %d saved to file '%s'\r\n", gcrTrackCacheTrack, currentFileName);
+        } else {
+            printf("saveGCRCacheToDiskImage: ERROR - Failed to save track %d to file '%s'\r\n", gcrTrackCacheTrack, currentFileName);
+        }
+    }
     
     // Mark cache as clean
     gcrTrackCacheDirty = false;

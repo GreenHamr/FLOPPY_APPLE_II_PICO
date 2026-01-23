@@ -119,6 +119,7 @@ public:
     // File operations
     bool fileExists(const char* filename);
     bool readFile(const char* filename, uint8_t* buffer, uint32_t maxSize, uint32_t* bytesRead);
+    bool writeFileAtOffset(const char* filename, uint32_t offset, const uint8_t* buffer, uint32_t size);
     bool listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount);
     
     // Directory operations

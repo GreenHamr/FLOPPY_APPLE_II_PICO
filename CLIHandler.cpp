@@ -239,6 +239,11 @@ void CLIHandler::handleLoad(const char* filename) {
     if (GET_SD()->loadDiskImage(filename, diskImage, diskSize, &bytesRead)) {
         // Call FloppyEmulator::loadDiskImage() to set initial track to 17
         GET_FLOPPY()->loadDiskImage(diskImage, bytesRead);
+        
+        // Set SD card manager and filename in FloppyEmulator for saving tracks
+        GET_FLOPPY()->setSDCardManager(GET_SD());
+        GET_FLOPPY()->setCurrentFileName(filename);
+        
         char msg[128];
         snprintf(msg, sizeof(msg), "Loaded %u bytes from %s\r\n", bytesRead, filename);
         sendResponse(msg);

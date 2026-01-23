@@ -234,6 +234,10 @@ void UIHandler::handleEncoderInput() {
                                     // Call FloppyEmulator::loadDiskImage() to set initial track to 17
                                     floppy->loadDiskImage(diskImage, bytesRead);
                                     
+                                    // Set SD card manager and filename in FloppyEmulator for saving tracks
+                                    floppy->setSDCardManager(sdCard);
+                                    floppy->setCurrentFileName(filename);
+                                    
                                     // Save loaded file name
                                     strncpy(loadedFileName, filename, sizeof(loadedFileName) - 1);
                                     loadedFileName[sizeof(loadedFileName) - 1] = 0;

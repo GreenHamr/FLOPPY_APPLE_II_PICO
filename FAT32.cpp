@@ -591,36 +591,27 @@ bool FAT32::readFile(const char* filename, uint8_t* buffer, uint32_t maxSize, ui
 // This function writes data to an existing file at a specific byte offset
 bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8_t* buffer, uint32_t size) {
     if (!sdCard || !buffer || size == 0) {
-        printf("writeFileAtOffset: Invalid parameters\r\n");
         return false;
     }
     
     FAT32_DirEntry entry;
     if (!findFile(filename, &entry)) {
-        printf("writeFileAtOffset: File '%s' not found\r\n", filename);
         return false;  // File not found
     }
     
     // Check if file is large enough
     if (entry.file_size < (offset + size)) {
-        printf("writeFileAtOffset: File too small (size=%u, need offset=%u+size=%u)\r\n", 
-               entry.file_size, offset, size);
         return false;
     }
     
     // Get starting cluster
     uint32_t cluster = entry.cluster_low | (entry.cluster_high << 16);
-    printf("writeFileAtOffset: File size=%u, start cluster=%u, offset=%u, size=%u\r\n", 
-           entry.file_size, cluster, offset, size);
     
     // Calculate which cluster contains the offset
     uint32_t clusterOffset = 0;
     uint32_t currentCluster = cluster;
     uint32_t bytesPerCluster = this->bytesPerCluster;
     uint32_t sectorsPerCluster = this->sectorsPerCluster;
-    
-    printf("writeFileAtOffset: bytesPerCluster=%u, sectorsPerCluster=%u, dataStartSector=%u\r\n",
-           bytesPerCluster, sectorsPerCluster, dataStartSector);
     
     // Find the cluster containing the offset
     int clusterCount = 0;
@@ -632,43 +623,27 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
         clusterCount++;
         
         if (currentCluster >= FAT32_CLUSTER_EOF_MIN) {
-            // File is shorter than offset - cannot write beyond file end
-            printf("writeFileAtOffset: Offset %u beyond file end (clusterOffset=%u, clusterCount=%d)\r\n", 
-                   offset, clusterOffset, clusterCount);
             return false;
         }
         
         if (clusterCount > 100) {
-            printf("writeFileAtOffset: Too many clusters traversed (possible loop)\r\n");
             return false;
         }
     }
     
-    printf("writeFileAtOffset: Found cluster %u at offset %u (traversed %d clusters)\r\n", 
-           currentCluster, clusterOffset, clusterCount);
-    
     // Verify cluster is valid
     if (currentCluster < FAT32_CLUSTER_RESERVED_MIN || 
-        currentCluster > FAT32_CLUSTER_RESERVED_MAX) {
-        printf("writeFileAtOffset: Invalid cluster %u after traversal\r\n", currentCluster);
-        return false;
-    }
-    
-    // Verify cluster is not EOF
-    if (currentCluster >= FAT32_CLUSTER_EOF_MIN) {
-        printf("writeFileAtOffset: Cluster %u is EOF\r\n", currentCluster);
+        currentCluster > FAT32_CLUSTER_RESERVED_MAX ||
+        currentCluster >= FAT32_CLUSTER_EOF_MIN) {
         return false;
     }
     
     // Now currentCluster contains the cluster we need to write to
     // Calculate offset within cluster
     uint32_t offsetInCluster = offset - clusterOffset;
-    printf("writeFileAtOffset: offsetInCluster=%u\r\n", offsetInCluster);
     
     // Verify offsetInCluster is within cluster bounds
     if (offsetInCluster >= bytesPerCluster) {
-        printf("writeFileAtOffset: offsetInCluster %u >= bytesPerCluster %u\r\n", 
-               offsetInCluster, bytesPerCluster);
         return false;
     }
     
@@ -686,27 +661,22 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
         
         // Check if sectorInCluster is within cluster bounds
         if (sectorInCluster >= sectorsPerCluster) {
-            printf("writeFileAtOffset: sectorInCluster %u >= sectorsPerCluster %u (offsetInCluster=%u), moving to next cluster\r\n",
-                   sectorInCluster, sectorsPerCluster, offsetInCluster);
             // Move to next cluster
             uint32_t nextCluster = readFATEntry(currentCluster);
             if (nextCluster >= FAT32_CLUSTER_EOF_MIN || 
                 nextCluster < FAT32_CLUSTER_RESERVED_MIN || 
                 nextCluster > FAT32_CLUSTER_RESERVED_MAX) {
-                printf("writeFileAtOffset: End of file reached (nextCluster=%u)\r\n", nextCluster);
                 break;
             }
             currentCluster = nextCluster;
             offsetInCluster = 0;
             sectorInCluster = 0;
             offsetInSector = 0;
-            printf("writeFileAtOffset: Moved to next cluster %u\r\n", currentCluster);
         }
         
         // Verify cluster is still valid
         if (currentCluster < FAT32_CLUSTER_RESERVED_MIN || 
             currentCluster > FAT32_CLUSTER_RESERVED_MAX) {
-            printf("writeFileAtOffset: Invalid cluster %u\r\n", currentCluster);
             break;
         }
         
@@ -716,13 +686,8 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
         
         // Verify sector is within cluster bounds
         if (sectorInCluster >= sectorsPerCluster) {
-            printf("writeFileAtOffset: ERROR - sectorInCluster %u >= sectorsPerCluster %u after checks!\r\n",
-                   sectorInCluster, sectorsPerCluster);
             break;
         }
-        
-        printf("writeFileAtOffset: sectorInCluster=%u, offsetInSector=%u, startSector=%u, sectorToWrite=%u, currentCluster=%u\r\n",
-               sectorInCluster, offsetInSector, startSector, sectorToWrite, currentCluster);
         
         // Always read sector first to preserve existing data
         // Try multiple times in case of transient read errors
@@ -732,17 +697,9 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
                 readSuccess = true;
                 break;
             }
-            if (retry < 2) {
-                printf("writeFileAtOffset: Retry %d reading sector %u\r\n", retry + 1, sectorToWrite);
-            }
         }
         
         if (!readSuccess) {
-            printf("writeFileAtOffset: Failed to read sector %u after 3 retries (startSector=%u, sectorInCluster=%u, currentCluster=%u, dataStartSector=%u)\r\n", 
-                   sectorToWrite, startSector, sectorInCluster, currentCluster, dataStartSector);
-            // Try to verify if cluster is still valid
-            uint32_t verifyCluster = readFATEntry(currentCluster);
-            printf("writeFileAtOffset: Current cluster %u FAT entry = %u\r\n", currentCluster, verifyCluster);
             return false;
         }
         
@@ -757,7 +714,6 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
         
         // Write sector back
         if (!sdCard->writeBlock(sectorToWrite, sectorBuffer)) {
-            printf("writeFileAtOffset: Failed to write sector %u\r\n", sectorToWrite);
             return false;
         }
         
@@ -773,8 +729,6 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
                 // Move to next cluster
                 currentCluster = readFATEntry(currentCluster);
                 if (currentCluster >= FAT32_CLUSTER_EOF_MIN) {
-                    // End of file reached - cannot write beyond file end
-                    printf("writeFileAtOffset: End of file reached (wrote %u of %u bytes)\r\n", bytesWritten, size);
                     break;
                 }
                 offsetInCluster = 0;  // Reset offset for new cluster
@@ -783,7 +737,6 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
     }
     
     if (bytesWritten != size) {
-        printf("writeFileAtOffset: Partial write (wrote %u of %u bytes)\r\n", bytesWritten, size);
         return false;
     }
     

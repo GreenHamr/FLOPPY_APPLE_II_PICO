@@ -686,7 +686,6 @@ bool SDCardManager::loadDiskImage(const char* filename, uint8_t* buffer, uint32_
 // Save track data to file at specific track position
 bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8_t* trackData, uint32_t trackSize) {
     if (!initialized || !trackData || trackSize == 0) {
-        printf("saveTrackToFile: Invalid parameters\r\n");
         return false;
     }
     
@@ -698,20 +697,10 @@ bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8
         const uint32_t BYTES_PER_TRACK = 16 * 256;  // 4096 bytes per track
         uint32_t offset = track * BYTES_PER_TRACK;
         
-        printf("saveTrackToFile: Writing track %d to file '%s' at offset %u (size=%u)\r\n", 
-               track, filename, offset, trackSize);
-        
         // Write track data at calculated offset
-        bool result = fat32->writeFileAtOffset(filename, offset, trackData, trackSize);
-        
-        if (!result) {
-            printf("saveTrackToFile: Failed to write track %d\r\n", track);
-        }
-        
-        return result;
+        return fat32->writeFileAtOffset(filename, offset, trackData, trackSize);
     }
     
-    printf("saveTrackToFile: FAT32 not available\r\n");
     return false;
 }
 

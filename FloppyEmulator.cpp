@@ -1342,20 +1342,14 @@ void FloppyEmulator::saveGCRCacheToDiskImage() {
         sectorsDecoded++;
     }
     
-    printf("saveGCRCacheToDiskImage: Track %d - %d sectors decoded, %d skipped\r\n", 
-           gcrTrackCacheTrack, sectorsDecoded, sectorsSkipped);
-    
     // Save track to SD card file if SD card manager and filename are available
     if (sdCardManager && currentFileName[0] != 0 && sectorsDecoded > 0) {
         // Get track data from diskImage (already decoded and written above)
         uint8_t* trackData = &diskImage[trackOffset];
         uint32_t trackSize = APPLE_II_BYTES_PER_TRACK;  // 4096 bytes per track
         
-        if (sdCardManager->saveTrackToFile(currentFileName, gcrTrackCacheTrack, trackData, trackSize)) {
-            printf("saveGCRCacheToDiskImage: Track %d saved to file '%s'\r\n", gcrTrackCacheTrack, currentFileName);
-        } else {
-            printf("saveGCRCacheToDiskImage: ERROR - Failed to save track %d to file '%s'\r\n", gcrTrackCacheTrack, currentFileName);
-        }
+        // Save track to file (silently fail if error occurs)
+        sdCardManager->saveTrackToFile(currentFileName, gcrTrackCacheTrack, trackData, trackSize);
     }
     
     // Mark cache as clean

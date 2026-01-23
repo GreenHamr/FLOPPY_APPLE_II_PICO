@@ -45,6 +45,7 @@ add_executable(FLOPPY_APPLE_II_PICO
     CLIHandler.cpp
     FAT32.cpp
     SSD1306.cpp
+    SH1107.cpp
     MSP1601.cpp
     Display.cpp
     RotaryEncoder.cpp

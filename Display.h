@@ -10,6 +10,11 @@
     typedef MSP1601 DisplayClass;
     #define DISPLAY_WIDTH LCD_WIDTH
     #define DISPLAY_HEIGHT LCD_HEIGHT
+#elif defined(USE_SH1107)
+    #include "SH1107.h"
+    typedef SH1107 DisplayClass;
+    #define DISPLAY_WIDTH OLED_WIDTH
+    #define DISPLAY_HEIGHT OLED_HEIGHT
 #else
     #include "SSD1306.h"
     typedef SSD1306 DisplayClass;

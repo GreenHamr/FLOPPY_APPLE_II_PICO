@@ -2073,8 +2073,8 @@ void FloppyEmulator::writeBack() {
                     gcrTrackCache[dataFieldPos + i] = writeBuffer[i];
                 }
                 gcrTrackCacheDirty = true;  // Mark cache as dirty - needs to be saved before track change
-                printf("GCR CACHE UPDATED: Physical sector %d, logical sector %d, %u bytes at offset %u\r\n",
-                       physicalSectorToWrite, currentSectortoWrite, bytesToCopy, dataFieldPos);
+                //printf("GCR CACHE UPDATED: Physical sector %d, logical sector %d, %u bytes at offset %u\r\n",
+                //       physicalSectorToWrite, currentSectortoWrite, bytesToCopy, dataFieldPos);
             } else {
                 printf("ERROR: GCR cache write would overflow! pos=%u, bytes=%u\r\n", dataFieldPos, bytesToCopy);
             }
@@ -2089,7 +2089,7 @@ void FloppyEmulator::writeBack() {
     prologBuffer[1] = 0;
     prologBuffer[2] = 0;
     prologBitCount = 0;
-    printf("=== WRITE ENDED - Buffer cleared ===\r\n\r\n");
+    //printf("=== WRITE ENDED - Buffer cleared ===\r\n\r\n");
     return;
 
     // =========================================================================

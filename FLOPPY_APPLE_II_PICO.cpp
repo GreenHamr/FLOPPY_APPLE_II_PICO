@@ -198,11 +198,15 @@ int main()
     printf("Initializing OLED display (I2C)...\r\n");
 #ifdef USE_SSD1309
     printf("Using SSD1309 controller (2.42\" display)\r\n");
+#elif defined(USE_SH1107)
+    printf("Using SH1107 controller (128x128 display)\r\n");
 #else
     printf("Using SSD1306 controller\r\n");
 #endif
 #ifdef USE_SSD1309
     i2c_init(OLED_I2C_INSTANCE, 400000);  // 400kHz I2C speed for SSD1309
+#elif defined(USE_SH1107)
+    i2c_init(OLED_I2C_INSTANCE, 400000);  // 400kHz I2C speed for SH1107
 #else
     i2c_init(OLED_I2C_INSTANCE, 400000);  // 400kHz I2C speed for SSD1306
 #endif
@@ -214,6 +218,8 @@ int main()
     // Create OLED display instance (static to avoid stack allocation)
 #ifdef USE_SSD1309
     static SSD1306 oledDisplay(OLED_I2C_INSTANCE, OLED_I2C_ADDRESS, OLED_RESET);
+#elif defined(USE_SH1107)
+    static SH1107 oledDisplay(OLED_I2C_INSTANCE, OLED_I2C_ADDRESS, OLED_RESET);
 #else
     static SSD1306 oledDisplay(OLED_I2C_INSTANCE, OLED_I2C_ADDRESS);
 #endif

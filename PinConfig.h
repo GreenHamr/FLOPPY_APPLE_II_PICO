@@ -42,10 +42,12 @@
 // ============================================================================
 
 // Display controller selection:
-// - Comment out all to use SSD1306 (default, I2C)
-// - Uncomment USE_SSD1309 to use SSD1309 (I2C)
-// - Uncomment USE_MSP1601 to use MSP1601/SSD1283A (SPI)
+// - Comment out all to use SSD1306 (default, I2C, 128x64)
+// - Uncomment USE_SSD1309 to use SSD1309 (I2C, 128x64)
+// - Uncomment USE_SH1107 to use SH1107 (I2C, 128x128)
+// - Uncomment USE_MSP1601 to use MSP1601/SSD1283A (SPI, 128x128)
 // #define USE_SSD1309
+#define USE_SH1107
 // #define USE_MSP1601
 
 // ============================================================================
@@ -64,6 +66,13 @@
         #define OLED_HEIGHT        64    // 2.42" display typically 128x64
         #define OLED_STATUS_HEIGHT 16    // Upper yellow section for status
         #define OLED_CONTENT_HEIGHT 48   // Lower blue section for content
+    #elif defined(USE_SH1107)
+        #define OLED_I2C_ADDRESS   0x3C  // SH1107 default I2C address (can be 0x3C or 0x3D)
+        #define OLED_RESET         22    // Reset pin for SH1107 (GPIO22, optional)
+        #define OLED_WIDTH         128
+        #define OLED_HEIGHT        128   // SH1107 is 128x128
+        #define OLED_STATUS_HEIGHT 20    // Status bar height for 128x128
+        #define OLED_CONTENT_HEIGHT 108  // Content area for 128x128
     #else
         #define OLED_I2C_ADDRESS   0x3C  // SSD1306 default I2C address
         #define OLED_WIDTH         128

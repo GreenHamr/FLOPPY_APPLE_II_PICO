@@ -72,6 +72,7 @@ private:
     int physicalSectorToWrite;             // Physical sector (0-15) - for GCR cache position
     uint32_t dmaPositionAtWriteStart;       // DMA position when write started (for sector detection)
 
+    //int LastTrackLoaded;            // Last track loaded from disk image
     int currentStep;                // Current step position (0-3 per track)
     int physicalTrack;              // Physical track position (0-69, matches ATMegaX DII_ph_track)
     StepperPhase currentPhase;      // Current stepper phase
@@ -139,6 +140,7 @@ private:
     uint writeIrqTimerOffset;       // PIO program offset
     bool writeIrqTimerActive;       // IRQ timer active flag
     
+    int lastTimeWriteCheck = get_absolute_time(); // Last time GCR cache was saved to disk image
     // Internal methods
     void initializeGCRTables();
     uint8_t encodeGCR(uint8_t data);
@@ -151,13 +153,12 @@ private:
     uint32_t getCurrentBitPosition(); // Get current bit position on track
     uint8_t getGCRBitAtPosition(uint32_t rawBitPosition); // Get GCR-encoded bit at raw bit position
     void updateGCRTrackCache();  // Update GCR cache for current track (called when track changes)
-    void saveGCRCacheToDiskImage();  // Save GCR cache back to disk image (called before track change if dirty)
     void initPIO_DMA();          // Initialize PIO and DMA for continuous bit output
     void startPIO_DMA();         // Start PIO/DMA streaming from cache buffer
     void stopPIO_DMA();          // Stop PIO/DMA streaming
     
 public:
-    // DMA IRQ handler (public for IRQ handler access)
+    void saveGCRCacheToDiskImage();  // Save GCR cache back to disk image (called before track change if dirty)
     void handleDMAIRQ();         // Handle DMA IRQ for fast restart (called from IRQ handler)
     // GPIO IRQ handler (public for IRQ handler access)
     void handleWriteEnableIRQ(uint32_t events);  // Handle WRITE_EN GPIO IRQ (called from IRQ handler)
@@ -168,11 +169,7 @@ public:
     void stopBitTimer();         // Stop hardware timer
     
 
-    //void initWriteIRQTimer();    // Initialize PIO IRQ timer for write bit capture
-    //void startWriteIRQTimer();   // Start PIO IRQ timer (4μs period)
-    //void stopWriteIRQTimer();    // Stop PIO IRQ timer
-    //void resetWriteIRQTimerX();  // Reset X register to 19 in PIO IRQ timer
-
+    bool getGCRTrackCacheDirty(); // Get GCR track cache dirty flag
 
     void initWritePWMTimer();    // Initialize PWM timer for write bit capture
     void startWritePWMTimer();   // Start PWM timer

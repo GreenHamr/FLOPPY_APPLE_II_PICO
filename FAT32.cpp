@@ -587,6 +587,165 @@ bool FAT32::readFile(const char* filename, uint8_t* buffer, uint32_t maxSize, ui
     return bytesReadSoFar > 0;
 }
 
+// Read file at specific offset
+bool FAT32::readFileAtOffset(const char* filename, uint32_t offset, uint8_t* buffer, uint32_t size, uint32_t* bytesRead) {
+    printf("readFileAtOffset: filename='%s', offset=%u, size=%u\r\n",
+           filename ? filename : "(null)", offset, size);
+    
+    if (!sdCard || !buffer || size == 0) {
+        printf("readFileAtOffset: Invalid parameters - sdCard=%p, buffer=%p, size=%u\r\n",
+               sdCard, buffer, size);
+        if (bytesRead) *bytesRead = 0;
+        return false;
+    }
+    
+    FAT32_DirEntry entry;
+    if (!findFile(filename, &entry)) {
+        printf("readFileAtOffset: File '%s' not found\r\n", filename);
+        if (bytesRead) *bytesRead = 0;
+        return false;
+    }
+    
+    printf("readFileAtOffset: File found - size=%u, start_cluster=%u\r\n", 
+           entry.file_size, entry.cluster_low | (entry.cluster_high << 16));
+    
+    // Check if offset is within file bounds
+    if (offset >= entry.file_size) {
+        printf("readFileAtOffset: Offset %u >= file size %u\r\n", offset, entry.file_size);
+        if (bytesRead) *bytesRead = 0;
+        return false;
+    }
+    
+    // Limit size to remaining file data
+    uint32_t maxSize = entry.file_size - offset;
+    if (size > maxSize) {
+        size = maxSize;
+    }
+    
+    // Get starting cluster
+    uint32_t cluster = entry.cluster_low | (entry.cluster_high << 16);
+    
+    // Calculate which cluster contains the offset
+    uint32_t clusterOffset = 0;
+    uint32_t currentCluster = cluster;
+    uint32_t bytesPerCluster = this->bytesPerCluster;
+    
+    // Find the cluster containing the offset
+    int clusterCount = 0;
+    while (clusterOffset + bytesPerCluster <= offset && 
+           currentCluster >= FAT32_CLUSTER_RESERVED_MIN && 
+           currentCluster <= FAT32_CLUSTER_RESERVED_MAX) {
+        clusterOffset += bytesPerCluster;
+        currentCluster = readFATEntry(currentCluster);
+        clusterCount++;
+        
+        if (currentCluster >= FAT32_CLUSTER_EOF_MIN) {
+            if (bytesRead) *bytesRead = 0;
+            return false;
+        }
+        
+        if (clusterCount > 100) {
+            if (bytesRead) *bytesRead = 0;
+            return false;
+        }
+    }
+    
+    // Verify cluster is valid
+    if (currentCluster < FAT32_CLUSTER_RESERVED_MIN || 
+        currentCluster > FAT32_CLUSTER_RESERVED_MAX ||
+        currentCluster >= FAT32_CLUSTER_EOF_MIN) {
+        if (bytesRead) *bytesRead = 0;
+        return false;
+    }
+    
+    // Calculate offset within cluster
+    uint32_t offsetInCluster = offset - clusterOffset;
+    
+    // Read data sector by sector
+    uint32_t bytesReadSoFar = 0;
+    static uint8_t sectorBuffer[512];
+    
+    while (bytesReadSoFar < size && 
+           currentCluster >= FAT32_CLUSTER_RESERVED_MIN && 
+           currentCluster <= FAT32_CLUSTER_RESERVED_MAX) {
+        
+        // Calculate which sector in cluster we're reading from
+        uint32_t sectorInCluster = offsetInCluster / 512;
+        uint32_t offsetInSector = offsetInCluster % 512;
+        
+        // Check if sectorInCluster is within cluster bounds
+        if (sectorInCluster >= sectorsPerCluster) {
+            // Move to next cluster
+            uint32_t nextCluster = readFATEntry(currentCluster);
+            if (nextCluster >= FAT32_CLUSTER_EOF_MIN || 
+                nextCluster < FAT32_CLUSTER_RESERVED_MIN || 
+                nextCluster > FAT32_CLUSTER_RESERVED_MAX) {
+                break;
+            }
+            currentCluster = nextCluster;
+            offsetInCluster = 0;
+            sectorInCluster = 0;
+            offsetInSector = 0;
+        }
+        
+        // Verify cluster is still valid
+        if (currentCluster < FAT32_CLUSTER_RESERVED_MIN || 
+            currentCluster > FAT32_CLUSTER_RESERVED_MAX) {
+            break;
+        }
+        
+        // Get sector number
+        uint32_t startSector = getClusterSector(currentCluster);
+        uint32_t sectorToRead = startSector + sectorInCluster;
+        
+        // Verify sector is within cluster bounds
+        if (sectorInCluster >= sectorsPerCluster) {
+            break;
+        }
+        
+        // Read sector
+        if (!sdCard->readBlock(sectorToRead, sectorBuffer)) {
+            printf("readFileAtOffset: Failed to read sector %u\r\n", sectorToRead);
+            break;
+        }
+        
+        // Calculate how many bytes to read from this sector
+        uint32_t bytesToRead = 512 - offsetInSector;
+        if (bytesToRead > (size - bytesReadSoFar)) {
+            bytesToRead = size - bytesReadSoFar;
+        }
+        
+        // Copy data from sector buffer
+        memcpy(buffer + bytesReadSoFar, sectorBuffer + offsetInSector, bytesToRead);
+        bytesReadSoFar += bytesToRead;
+        
+        // Move to next sector/cluster if needed
+        if (bytesReadSoFar < size) {
+            // Move to next sector
+            offsetInCluster += bytesToRead;
+            
+            // Check if we've moved to next cluster
+            if (offsetInCluster >= bytesPerCluster) {
+                // Move to next cluster
+                currentCluster = readFATEntry(currentCluster);
+                if (currentCluster >= FAT32_CLUSTER_EOF_MIN) {
+                    break;
+                }
+                offsetInCluster = 0;  // Reset offset for new cluster
+            }
+        }
+    }
+    
+    if (bytesRead) {
+        *bytesRead = bytesReadSoFar;
+    }
+    
+    printf("readFileAtOffset: Completed - bytesReadSoFar=%u, requested=%u, success=%d\r\n",
+           bytesReadSoFar, size, bytesReadSoFar > 0);
+    
+    return bytesReadSoFar > 0;
+}
+
 // Write file at specific offset
 // This function writes data to an existing file at a specific byte offset
 bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8_t* buffer, uint32_t size) {

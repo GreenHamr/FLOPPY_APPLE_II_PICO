@@ -870,6 +870,9 @@ void FloppyEmulator::writeBit(uint8_t bit) {
 
 // Load disk image from external source
 void FloppyEmulator::loadDiskImage(const uint8_t* image, uint32_t size) {
+    
+    saveGCRCacheToDiskImage();
+
     uint32_t copySize = size < APPLE_II_DISK_SIZE ? size : APPLE_II_DISK_SIZE;
     
     for (uint32_t i = 0; i < copySize; i++) {
@@ -1254,17 +1257,21 @@ void FloppyEmulator::updateGCRTrackCache() {
     gcrTrackCacheDirty = false;  // Cache is clean after loading
 }
 
+
+bool FloppyEmulator::getGCRTrackCacheDirty() {
+    return gcrTrackCacheDirty;
+}
 // Save GCR cache back to disk image
 // Called before track change if the cache has been modified (dirty)
 // Decodes all 16 sectors from GCR cache and writes them to the disk image
 void FloppyEmulator::saveGCRCacheToDiskImage() {
-    //printf("saveGCRCacheToDiskImage\r\n");
     // Only save if cache is valid and dirty
     if (gcrTrackCacheTrack < 0 || gcrTrackCacheTrack >= APPLE_II_TRACKS || !gcrTrackCacheDirty) {
         return;
     }
     
-    //printf("saveGCRCacheToDiskImage: Saving track %d to disk image...\r\n", gcrTrackCacheTrack);
+    //printf("saveGCRCacheToDiskImage\r\n");
+    printf("saveGCRCacheToDiskImage: Saving track %d to disk image...\r\n", gcrTrackCacheTrack);
     
     // GCR cache sector structure (416 bytes per sector):
     // - 22 sync bytes (0xFF)
@@ -1542,7 +1549,7 @@ void FloppyEmulator::handleDMAIRQ() {
 // Main processing loop - react to controller signals
 void FloppyEmulator::process() {
     // NO printf() here - this runs on core0 and printf() can block!
-    
+    //saveGCRCacheToDiskImage();
     // CRITICAL: During write operation, minimize processing to avoid interference
     // Only do essential operations during write to prevent timing issues
     if (writeIrqTimerActive) {
@@ -1565,6 +1572,7 @@ void FloppyEmulator::process() {
     // In real Apple II floppy drive, READ pin constantly outputs data when drive is spinning
     // Update cache if track changed (don't abort DMA - let it finish current cycle first)
     if (gcrTrackCacheTrack != currentTrack) {
+        
         updateGCRTrackCache();
         // Don't abort DMA here - it will restart with new cache when current cycle completes
         // This avoids interruptions in the continuous stream
@@ -1578,6 +1586,16 @@ void FloppyEmulator::process() {
     
     // Update timing state (index pulse, etc.)
     updateTiming();
+
+    if (!gcrTrackCacheDirty) lastTimeWriteCheck = get_absolute_time();
+    int diff = absolute_time_diff_us(lastTimeWriteCheck, get_absolute_time());
+    //printf("Diff: %d\r\n", diff);
+    if (diff > 3000000) {
+        lastTimeWriteCheck = get_absolute_time();
+        printf("Saving GCR cache to disk image... V0.3.0\r\n");
+        saveGCRCacheToDiskImage();
+    }
+
 }
 
 //================================================================================

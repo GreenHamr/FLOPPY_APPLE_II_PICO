@@ -691,6 +691,10 @@ bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8
     
     // Use FAT32 if available
     if (fat32) {
+        // Use filename as-is - findFile() searches in current directory
+        // Don't construct full path because listFiles() returns only filenames
+        // and findFile() searches in the current directory context
+        
         // Calculate offset in file: track * bytes per track
         // Apple II disk format: 35 tracks * 16 sectors * 256 bytes = 143360 bytes total
         // Each track is 4096 bytes (16 sectors * 256 bytes)
@@ -699,6 +703,49 @@ bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8
         
         // Write track data at calculated offset
         return fat32->writeFileAtOffset(filename, offset, trackData, trackSize);
+    }
+    
+    return false;
+}
+
+// Read track data from file at specific track position
+bool SDCardManager::readTrackFromFile(const char* filename, int track, uint8_t* trackData, uint32_t trackSize) {
+    printf("readTrackFromFile: filename='%s', track=%d, trackSize=%u\r\n", 
+           filename ? filename : "(null)", track, trackSize);
+    
+    if (!initialized || !trackData || trackSize == 0) {
+        printf("readTrackFromFile: Invalid parameters - initialized=%d, trackData=%p, trackSize=%u\r\n",
+               initialized, trackData, trackSize);
+        return false;
+    }
+    
+    // Use FAT32 if available
+    if (fat32) {
+        // Use filename as-is - findFile() searches in current directory
+        // Don't construct full path because listFiles() returns only filenames
+        // and findFile() searches in the current directory context
+        
+        printf("readTrackFromFile: Using filename='%s' (findFile will search in current directory)\r\n", filename);
+        
+        // Calculate offset in file: track * bytes per track
+        // Apple II disk format: 35 tracks * 16 sectors * 256 bytes = 143360 bytes total
+        // Each track is 4096 bytes (16 sectors * 256 bytes)
+        const uint32_t BYTES_PER_TRACK = 16 * 256;  // 4096 bytes per track
+        uint32_t offset = track * BYTES_PER_TRACK;
+        
+        printf("readTrackFromFile: offset=%u (track %d * %u bytes)\r\n", offset, track, BYTES_PER_TRACK);
+        
+        // Read track data at calculated offset
+        uint32_t bytesRead = 0;
+        if (fat32->readFileAtOffset(filename, offset, trackData, trackSize, &bytesRead)) {
+            printf("readTrackFromFile: readFileAtOffset SUCCESS - bytesRead=%u, expected=%u\r\n",
+                   bytesRead, trackSize);
+            return bytesRead == trackSize;
+        } else {
+            printf("readTrackFromFile: readFileAtOffset FAILED\r\n");
+        }
+    } else {
+        printf("readTrackFromFile: FAT32 not available\r\n");
     }
     
     return false;

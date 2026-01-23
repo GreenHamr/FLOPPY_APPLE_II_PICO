@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <hardware/sync.h>
+#include <pico/time.h>
 #include <stdint.h>
 #include <hardware/gpio.h>
 #include <stdio.h>
@@ -269,21 +271,23 @@ int main()
     gpio_set_dir(14, GPIO_OUT);
     gpio_put(14, 0);
     gpio_pull_up(14);
-    printf("Main loop starting... V0.2.8\r\n");
+    printf("Main loop starting... V0.3.0\r\n");
     //g_floppy->startWriteIRQTimer();
 
 //    uint8_t writeENState = 0;
+
     while (true) {
       
         // CRITICAL: During write operation, use tight polling loop
         // Write timing is critical - based on AVR write loop implementation
         if (floppy.isWriteEnabled() && floppy.isDriveSelected()) {
+            
             // Start write procedure (init_writing equivalent)
             g_floppy->startWritingProcedure();
             
             // Get initial magnetic state
             uint8_t magstate = g_floppy->floppy_write_in();
-            
+            uint32_t flags = save_and_disable_interrupts();
             // Tight polling loop - runs until write ends
             do {
                 // Check for pin state change (flux transition)
@@ -302,11 +306,22 @@ int main()
             
             // End write procedure (end_writing equivalent)
             g_floppy->stopWritingProcedure();
+            restore_interrupts(flags);
             continue;
         }
         
         g_floppy->process();
         
+        /*
+        if (!g_floppy->getGCRTrackCacheDirty()) lastTime = get_absolute_time();
+        int diff = absolute_time_diff_us(lastTime, get_absolute_time());
+        //printf("Diff: %d\r\n", diff);
+        if (diff > 3000000) {
+            lastTime = get_absolute_time();
+            printf("Saving GCR cache to disk image... V0.3.0\r\n");
+            g_floppy->saveGCRCacheToDiskImage();
+        }
+        */
         // Don't sleep when PIO/DMA is active - it needs continuous CPU cycles
         // Only check drive selection for other tasks (SD card hotplug, etc.)
         if (!floppy.isDriveSelected()) {

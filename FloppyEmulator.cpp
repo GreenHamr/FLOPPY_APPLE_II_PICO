@@ -22,23 +22,6 @@ static PIO g_writeIrqTimerPio = nullptr;
 
 static uint slice_num;
 
-/*
-// PWM IRQ handler for write timer (4μs period)
-void pwm_irq_handler() {
-    pwm_clear_irq(slice_num);
-    if (!g_floppyEmulatorInstance) {
-        return;  // Write not active - ignore IRQ
-    }
-    if (!g_floppyEmulatorInstance->isWriteEnabled()) {
-        return;
-    }
-    if (!g_floppyEmulatorInstance->isDriveSelected()) {
-        return;
-    }
-    g_floppyEmulatorInstance->handleWriteIRQTimer();
-}
-
-*/
 
 
 // GPIO IRQ handler for WRITE_EN and WRITE pins (reacts to both rising and falling edges)
@@ -475,10 +458,12 @@ void FloppyEmulator::detectStepperPhaseChange() {
             // Moving forward (outward): PH0->PH1->PH2->PH3->PH0
             // Increase physical track (matches ATMegaX: DII_ph_track++)
             physicalTrack++;
+            lastTimeChangeTrackCheck = get_absolute_time();
         } else if (ofs == ((StepperPhase)((lastPhase - 1) & 0x3))) {
             // Moving backward (inward): PH0->PH3->PH2->PH1->PH0
             // Decrease physical track (matches ATMegaX: DII_ph_track--)
             physicalTrack--;
+            lastTimeChangeTrackCheck = get_absolute_time();
         }
         // If neither condition is true, it's an invalid transition (skipped phase) - ignore
         
@@ -687,185 +672,6 @@ bool FloppyEmulator::getGCRSectorFromCache(int sector, uint8_t* buffer, uint32_t
 uint32_t FloppyEmulator::getCurrentBitPosition() {
     updateRotationPosition();
     return rotationPosition;
-}
-
-// Get GCR-encoded bit at raw bit position
-// Apple II uses 5-and-3 GCR encoding: 5 data bits -> 6 GCR bits
-// 5 bytes (40 bits) -> 6 bytes (48 bits) GCR
-// Optimized version: calculate GCR bit directly from raw bit position
-uint8_t FloppyEmulator::getGCRBitAtPosition(uint32_t rawBitPosition) {
-    // Calculate track offset
-    uint32_t trackOffset = currentTrack * APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR;
-    uint32_t bytesPerTrack = APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR;
-    uint32_t bytePosition = rawBitPosition / 8;
-    
-    if (trackOffset + bytePosition >= APPLE_II_DISK_SIZE) {
-        return 0;  // Out of bounds
-    }
-    
-    // Calculate which 5-byte group (each group becomes 6 GCR bytes)
-    uint32_t groupIndex = bytePosition / 5;
-    uint32_t byteInGroup = bytePosition % 5;
-    uint32_t bitInByte = rawBitPosition % 8;
-    
-    // Read the 5 bytes for this group
-    uint8_t groupData[5];
-    uint32_t groupStart = trackOffset + (groupIndex * 5);
-    for (int i = 0; i < 5; i++) {
-        uint32_t byteIdx = groupStart + i;
-        if (byteIdx < APPLE_II_DISK_SIZE) {
-            groupData[i] = diskImage[byteIdx];
-        } else {
-            groupData[i] = 0;
-        }
-    }
-    
-    // Encode to GCR: 5 bytes (40 bits) -> 6 GCR bytes (48 bits)
-    // Apple II 5-and-3 GCR encoding: 5 data bits -> 6 GCR bits
-    // Algorithm: Take 40 bits, split into 8 groups of 5 bits, encode each to 6 GCR bits
-    // Result: 8 groups * 6 bits = 48 bits = 6 bytes
-    uint8_t gcrData[6];
-    
-    // Build 40-bit stream from 5 bytes
-    uint8_t bitStream[40];
-    int bitIdx = 0;
-    for (int i = 0; i < 5; i++) {
-        for (int b = 7; b >= 0; b--) {
-            bitStream[bitIdx++] = (groupData[i] >> b) & 0x01;
-        }
-    }
-    
-    // Encode 8 groups of 5 bits to 8 groups of 6 GCR bits
-    for (int i = 0; i < 6; i++) {
-        // Extract 5 bits starting at position (i * 5) from bit stream
-        // But we need to map correctly: 6 GCR bytes = 48 bits
-        // Each GCR byte contains 6 bits from encoding 5 data bits
-        // So GCR byte i contains bits from data positions around (i * 40 / 48) * 5
-        uint32_t dataBitStart = (i * 40) / 6;  // Approximate mapping
-        if (dataBitStart + 5 > 40) dataBitStart = 40 - 5;  // Clamp to valid range
-        
-        // Extract 5 bits
-        uint8_t fiveBits = 0;
-        for (int b = 0; b < 5 && (dataBitStart + b) < 40; b++) {
-            fiveBits = (fiveBits << 1) | bitStream[dataBitStart + b];
-        }
-        
-        gcrData[i] = encodeGCR(fiveBits);
-    }
-    
-    // Calculate which GCR bit corresponds to this raw bit position
-    // Raw bit position within the 5-byte group (0-39)
-    uint32_t rawBitInGroup = (rawBitPosition % 40);
-    
-    // Map to GCR bit position (0-47)
-    // Linear mapping: raw bit N -> GCR bit (N * 48 / 40)
-    uint32_t gcrBitPos = (rawBitInGroup * 48) / 40;
-    uint32_t gcrByteIdx = gcrBitPos / 8;
-    uint32_t gcrBitIdx = gcrBitPos % 8;
-    
-    if (gcrByteIdx < 6) {
-        uint8_t gcrByte = gcrData[gcrByteIdx];
-        return (gcrByte >> (7 - gcrBitIdx)) & 0x01;
-    }
-    
-    return 0;
-}
-
-// Process read bit - output to controller via READ pin
-void FloppyEmulator::processReadBit() {
-    // Note: updateRotationPosition() is already called in process() before this
-    // So rotationPosition is already up-to-date
-    
-    // Calculate which byte and bit to read from current track
-    // Track data is organized as: track -> sectors -> bytes -> bits
-    uint32_t bitsPerTrack = APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR * 8;
-    uint32_t bitPosition = rotationPosition % bitsPerTrack;
-    
-    // Get GCR-encoded bit at this position
-    // Apple II controller expects GCR-encoded data, not RAW data
-    uint8_t gcrBit = getGCRBitAtPosition(bitPosition);
-    
-    // Output GCR bit to READ pin
-    // Controller reads this pin at its own timing (synchronously)
-    gpio_put(readPin, gcrBit);
-}
-
-// Process write bit - read from controller via WRITE pin
-void FloppyEmulator::processWriteBit() {
-    // Only accept writes if drive is selected and write is enabled
-    if (!isDriveSelected() || !isWriteEnabled()) {
-        return;
-    }
-    
-    updateRotationPosition();
-    
-    // Read bit from WRITE pin (controller sends data here)
-    uint8_t bit = gpio_get(writePin) ? 1 : 0;
-    
-    // Calculate which byte and bit to write
-    uint32_t bitsPerTrack = APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR * 8;
-    uint32_t bitPosition = rotationPosition % bitsPerTrack;
-    int byteIndex = bitPosition / 8;
-    int bitIndex = bitPosition % 8;
-    
-    // Write to current track
-    uint32_t trackOffset = currentTrack * APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR;
-    if (trackOffset + byteIndex < APPLE_II_DISK_SIZE) {
-        uint8_t byte = diskImage[trackOffset + byteIndex];
-        if (bit) {
-            byte |= (1 << (7 - bitIndex));
-        } else {
-            byte &= ~(1 << (7 - bitIndex));
-        }
-        diskImage[trackOffset + byteIndex] = byte;
-    }
-}
-
-// Read one bit (for CLI/debugging - not used in real operation)
-uint8_t FloppyEmulator::readBit() {
-    updateRotationPosition();
-    uint32_t bitsPerTrack = APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR * 8;
-    uint32_t bitPosition = rotationPosition % bitsPerTrack;
-    int byteIndex = bitPosition / 8;
-    int bitIndex = bitPosition % 8;
-    uint32_t trackOffset = currentTrack * APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR;
-    if (trackOffset + byteIndex < APPLE_II_DISK_SIZE) {
-        uint8_t byte = diskImage[trackOffset + byteIndex];
-        return (byte >> (7 - bitIndex)) & 0x01;
-    }
-    return 0;
-}
-
-// Write one bit directly to GCR cache at rotationPosition
-// rotationPosition is in GCR bit units (0-53247), matching gcrTrackCache
-// This is called from handleWriteIRQTimer() during write operations
-void FloppyEmulator::writeBit(uint8_t bit) {
-    if (!isWriteEnabled()) return;
-    
-    // Ensure GCR cache is valid for current track
-    if (gcrTrackCacheTrack != currentTrack) {
-        printf("updateGCRTrackCache\r\n");
-        updateGCRTrackCache();
-    }
-    
-    // rotationPosition is in GCR bits (0-53247), write directly to gcrTrackCache
-    uint32_t gcrBitsPerTrack = APPLE_II_GCR_BYTES_PER_TRACK * 8;
-    uint32_t gcrBitPosition = rotationPosition % gcrBitsPerTrack;
-    
-    int byteIndex = gcrBitPosition / 8;
-    int bitIndex = gcrBitPosition % 8;
-    
-    //printf("rotationPosition: %d, bit: %d\r\n", rotationPosition, bit);
-    
-    if (byteIndex < APPLE_II_GCR_BYTES_PER_TRACK) {
-        uint8_t byte = gcrTrackCache[byteIndex];
-        if (bit) {
-            byte |= (1 << (7 - bitIndex));
-        } else {
-            byte &= ~(1 << (7 - bitIndex));
-        }
-        gcrTrackCache[byteIndex] = byte;
-    }
 }
 
 // Load disk image from external source
@@ -1572,10 +1378,18 @@ void FloppyEmulator::process() {
     // In real Apple II floppy drive, READ pin constantly outputs data when drive is spinning
     // Update cache if track changed (don't abort DMA - let it finish current cycle first)
     if (gcrTrackCacheTrack != currentTrack) {
-        
-        updateGCRTrackCache();
+/*
+        int diff = absolute_time_diff_us(lastTimeChangeTrackCheck, get_absolute_time());
+        //printf("Diff: %d\r\n", diff);
+        if (diff > 20000) {
+            printf("updateGCRTrackCache: track changed from %d to %d\r\n", gcrTrackCacheTrack, currentTrack);
+            lastTimeChangeTrackCheck = get_absolute_time();
+            updateGCRTrackCache();
+        }        
+*/        
         // Don't abort DMA here - it will restart with new cache when current cycle completes
         // This avoids interruptions in the continuous stream
+        updateGCRTrackCache();
     }
    
     // DMA restart is now handled by IRQ handler for faster response
@@ -1621,13 +1435,6 @@ void FloppyEmulator::initWritePWMTimer() {
     
     // Set wrap value for 4μs period
     pwm_set_wrap(slice_num, PWM_TIMER_VALUE);
-
-    // Configure IRQ
-//    pwm_clear_irq(slice_num);
-//    pwm_set_irq_enabled(slice_num, true);
-//    irq_set_exclusive_handler(PWM_IRQ_WRAP, pwm_irq_handler);
-//    irq_set_priority(PWM_IRQ_WRAP, 1);
-//    irq_set_enabled(PWM_IRQ_WRAP, true);
 
     // Start timer
     pwm_set_enabled(slice_num, true);
@@ -1908,62 +1715,6 @@ void FloppyEmulator::handleWriteIRQ(uint32_t events) {
     (void)events;  // Suppress unused variable warning
 }
 //..................................................................................................................................................
-/*
-// Handle PIO IRQ timer interrupt (called from IRQ handler)
-// CRITICAL: This function runs in IRQ context - keep it FAST!
-// This is called every 4μs to capture bits from WRITE pin during write operation
-void FloppyEmulator::handleWriteIRQTimer() {
-    // Check if write operation is still active (WRITE_EN should be LOW)
-    // If WRITE_EN went HIGH, we should stop (but this is handled in GPIO IRQ handler)
-    // For safety, check if timer is still active
-    //hw_clear_bits(&sio_hw->gpio_clr, 1u << 2);  // Clear bit 2 (LOW)
-    //gpio_put(2, 0);
-    //stopWriteIRQTimer();
-    gpio_put(2, !gpio_get(2));
-
-//    stopWriteIRQTimer();
-    //return;
-
-//    sleep_us(1);
-
-    // Read current state of WRITE pin
-    uint8_t currentWritePinState = gpio_get(writePin) ? 1 : 0;
-    
-    //hw_clear_bits(&sio_hw->gpio_clr, 1u << 3);  // Clear bit 2 (LOW)
-    //startWriteIRQTimer();
-    //return;
-    // Detect flux transition (pin state change) = bit "1"
-    // No change = bit "0"
-    //uint8_t currentBit = 0;
-//    if (currentWritePinState != lastWritePinState) {
-        // Flux transition detected - bit "1"
-        //currentBit = 1;
-//        writePinChange();
-//        lastWritePinState = currentWritePinState;
-//        resetWritePWMTimer();
-        // Add bit to raw bit buffer (byte-by-byte collection for debugging)
-//        addBitToRAWBuffer(1);
-//    } else {
-        hw_set_bits(&sio_hw->gpio_set, 1u << 3);  // Set bit 2 (HIGH)
-        // No flux transition - bit "0"
-        //currentBit = 0;
-        writeIdle();
-        lastWritePinState = currentWritePinState;
-        // Add bit to raw bit buffer (byte-by-byte collection for debugging)
-        //addBitToRAWBuffer(0);
-        hw_clear_bits(&sio_hw->gpio_clr, 1u << 3);  // Clear bit 2 (LOW)
-//    }
-    
-    // Write bit at current rotationPosition (rotationPosition is continuously updated by process() 
-    // to track head position while reading, so it already points to the correct write location)
-    //writeBit(currentBit);
-    
-    // After writing the bit, increment rotationPosition for the next bit
-    // This ensures rotationPosition continues to track head position during write
-    uint32_t gcrBitsPerTrack = APPLE_II_GCR_BYTES_PER_TRACK * 8;
-    rotationPosition = (rotationPosition + 1) % gcrBitsPerTrack;
-}
-*/
 //..................................................................................................................................................
 
 

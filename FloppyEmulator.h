@@ -122,6 +122,11 @@ private:
     uint32_t gcrTrackCacheBits;     // Number of GCR bits in cache (48 bits per 5-byte group)
     bool gcrTrackCacheDirty;        // True if GCR cache has been modified (needs to be saved before track change)
     
+    // Track change detection for delayed cache loading
+    int pendingTrack;                // Track that needs to be loaded (when stable)
+    absolute_time_t trackChangeTime; // Time when track last changed
+    static const uint32_t TRACK_STABLE_TIMEOUT_MS = 200;  // Wait 200ms before loading track from SD
+    
     // SD card and file management
     SDCardManager* sdCardManager;    // Pointer to SD card manager (for saving tracks to file)
     char currentFileName[64];        // Current disk image filename (for saving tracks)
@@ -141,6 +146,7 @@ private:
     bool writeIrqTimerActive;       // IRQ timer active flag
     
     int lastTimeWriteCheck = get_absolute_time(); // Last time GCR cache was saved to disk image
+    int lastTimeChangeTrackCheck = get_absolute_time(); // Last time GCR cache was saved to disk image
     // Internal methods
     void initializeGCRTables();
     uint8_t encodeGCR(uint8_t data);
@@ -151,7 +157,7 @@ private:
     uint32_t calculateTrackOffset(int track, int sector);
     void updateRotationPosition();
     uint32_t getCurrentBitPosition(); // Get current bit position on track
-    uint8_t getGCRBitAtPosition(uint32_t rawBitPosition); // Get GCR-encoded bit at raw bit position
+//    uint8_t getGCRBitAtPosition(uint32_t rawBitPosition); // Get GCR-encoded bit at raw bit position
     void updateGCRTrackCache();  // Update GCR cache for current track (called when track changes)
     void initPIO_DMA();          // Initialize PIO and DMA for continuous bit output
     void startPIO_DMA();         // Start PIO/DMA streaming from cache buffer
@@ -216,15 +222,11 @@ public:
     void decodeSectorGCR(const uint8_t* gcr, uint8_t* data, int length);
     
     // Read/Write operations (reactive to controller)
-    void processReadBit();          // Output next bit on READ pin (called by controller timing)
-    void processWriteBit();         // Read bit from WRITE pin (called when controller writes)
     bool readSector(int track, int sector, uint8_t* buffer);  // For CLI/debugging
     bool writeSector(int track, int sector, const uint8_t* buffer);  // For CLI/debugging
     // Get GCR cache contents for a sector (416 bytes per sector in cache)
     // Uses current track from cache - each sector occupies 416 bytes
     bool getGCRSectorFromCache(int sector, uint8_t* buffer, uint32_t maxLen, uint32_t* outLen);
-    uint8_t readBit();              // For CLI/debugging only
-    void writeBit(uint8_t bit);     // For CLI/debugging only
     
     // Disk image management
     void loadDiskImage(const uint8_t* image, uint32_t size);

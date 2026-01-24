@@ -589,8 +589,8 @@ bool FAT32::readFile(const char* filename, uint8_t* buffer, uint32_t maxSize, ui
 
 // Read file at specific offset
 bool FAT32::readFileAtOffset(const char* filename, uint32_t offset, uint8_t* buffer, uint32_t size, uint32_t* bytesRead) {
-    printf("readFileAtOffset: filename='%s', offset=%u, size=%u\r\n",
-           filename ? filename : "(null)", offset, size);
+    //printf("readFileAtOffset: filename='%s', offset=%u, size=%u\r\n",
+    //       filename ? filename : "(null)", offset, size);
     
     if (!sdCard || !buffer || size == 0) {
         printf("readFileAtOffset: Invalid parameters - sdCard=%p, buffer=%p, size=%u\r\n",
@@ -606,12 +606,12 @@ bool FAT32::readFileAtOffset(const char* filename, uint32_t offset, uint8_t* buf
         return false;
     }
     
-    printf("readFileAtOffset: File found - size=%u, start_cluster=%u\r\n", 
-           entry.file_size, entry.cluster_low | (entry.cluster_high << 16));
+    //printf("readFileAtOffset: File found - size=%u, start_cluster=%u\r\n", 
+    //       entry.file_size, entry.cluster_low | (entry.cluster_high << 16));
     
     // Check if offset is within file bounds
     if (offset >= entry.file_size) {
-        printf("readFileAtOffset: Offset %u >= file size %u\r\n", offset, entry.file_size);
+        //printf("readFileAtOffset: Offset %u >= file size %u\r\n", offset, entry.file_size);
         if (bytesRead) *bytesRead = 0;
         return false;
     }
@@ -740,8 +740,8 @@ bool FAT32::readFileAtOffset(const char* filename, uint32_t offset, uint8_t* buf
         *bytesRead = bytesReadSoFar;
     }
     
-    printf("readFileAtOffset: Completed - bytesReadSoFar=%u, requested=%u, success=%d\r\n",
-           bytesReadSoFar, size, bytesReadSoFar > 0);
+    //printf("readFileAtOffset: Completed - bytesReadSoFar=%u, requested=%u, success=%d\r\n",
+    //       bytesReadSoFar, size, bytesReadSoFar > 0);
     
     return bytesReadSoFar > 0;
 }

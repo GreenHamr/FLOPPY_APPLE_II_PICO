@@ -80,6 +80,11 @@ target_include_directories(FLOPPY_APPLE_II_PICO PRIVATE
 )
 
 #pico_set_binary_type(FLOPPY_APPLE_II_PICO no_flash)
+
 pico_set_binary_type(FLOPPY_APPLE_II_PICO copy_to_ram)
 pico_add_extra_outputs(FLOPPY_APPLE_II_PICO)
+
+
+
+
 

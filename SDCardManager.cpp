@@ -710,8 +710,8 @@ bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8
 
 // Read track data from file at specific track position
 bool SDCardManager::readTrackFromFile(const char* filename, int track, uint8_t* trackData, uint32_t trackSize) {
-    printf("readTrackFromFile: filename='%s', track=%d, trackSize=%u\r\n", 
-           filename ? filename : "(null)", track, trackSize);
+    //printf("readTrackFromFile: filename='%s', track=%d, trackSize=%u\r\n", 
+    //       filename ? filename : "(null)", track, trackSize);
     
     if (!initialized || !trackData || trackSize == 0) {
         printf("readTrackFromFile: Invalid parameters - initialized=%d, trackData=%p, trackSize=%u\r\n",
@@ -725,7 +725,7 @@ bool SDCardManager::readTrackFromFile(const char* filename, int track, uint8_t* 
         // Don't construct full path because listFiles() returns only filenames
         // and findFile() searches in the current directory context
         
-        printf("readTrackFromFile: Using filename='%s' (findFile will search in current directory)\r\n", filename);
+        //printf("readTrackFromFile: Using filename='%s' (findFile will search in current directory)\r\n", filename);
         
         // Calculate offset in file: track * bytes per track
         // Apple II disk format: 35 tracks * 16 sectors * 256 bytes = 143360 bytes total
@@ -733,13 +733,13 @@ bool SDCardManager::readTrackFromFile(const char* filename, int track, uint8_t* 
         const uint32_t BYTES_PER_TRACK = 16 * 256;  // 4096 bytes per track
         uint32_t offset = track * BYTES_PER_TRACK;
         
-        printf("readTrackFromFile: offset=%u (track %d * %u bytes)\r\n", offset, track, BYTES_PER_TRACK);
+        //printf("readTrackFromFile: offset=%u (track %d * %u bytes)\r\n", offset, track, BYTES_PER_TRACK);
         
         // Read track data at calculated offset
         uint32_t bytesRead = 0;
         if (fat32->readFileAtOffset(filename, offset, trackData, trackSize, &bytesRead)) {
-            printf("readTrackFromFile: readFileAtOffset SUCCESS - bytesRead=%u, expected=%u\r\n",
-                   bytesRead, trackSize);
+            //printf("readTrackFromFile: readFileAtOffset SUCCESS - bytesRead=%u, expected=%u\r\n",
+            //       bytesRead, trackSize);
             return bytesRead == trackSize;
         } else {
             printf("readTrackFromFile: readFileAtOffset FAILED\r\n");

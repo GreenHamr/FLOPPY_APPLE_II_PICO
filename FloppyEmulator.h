@@ -167,8 +167,8 @@ public:
     void saveGCRCacheToDiskImage();  // Save GCR cache back to disk image (called before track change if dirty)
     void handleDMAIRQ();         // Handle DMA IRQ for fast restart (called from IRQ handler)
     // GPIO IRQ handler (public for IRQ handler access)
-    void handleWriteEnableIRQ(uint32_t events);  // Handle WRITE_EN GPIO IRQ (called from IRQ handler)
-    void handleWriteIRQ(uint32_t events);  // Handle WRITE pin GPIO IRQ (called from IRQ handler)
+    //void handleWriteEnableIRQ(uint32_t events);  // Handle WRITE_EN GPIO IRQ (called from IRQ handler)
+    //void handleWriteIRQ(uint32_t events);  // Handle WRITE pin GPIO IRQ (called from IRQ handler)
     // Timer interrupt methods (public for callback access)
     void processBitTimer();      // Process bit timer interrupt (called from timer callback)
     void startBitTimer();        // Start hardware timer for bit-level timing
@@ -193,7 +193,7 @@ public:
     void writeBack();            // Write captured data back to disk image
     void startWritingProcedure(); // Start writing procedure (called when write starts)
     void stopWritingProcedure(); // Stop writing procedure (called when write ends)
-    void addBitToRAWBuffer(uint8_t bit); // Add bit to RAW buffer
+    //void addBitToRAWBuffer(uint8_t bit); // Add bit to RAW buffer
     
     bool floppy_write_in();
     void decodeNICDataField(const uint8_t* gcrData, uint16_t gcrLength, uint8_t* decodedData, uint16_t* decodedLength);  // Decode NIC-encoded data field

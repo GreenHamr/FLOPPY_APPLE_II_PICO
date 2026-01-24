@@ -80,6 +80,11 @@ void core1_process() {
     }
 }
 
+bool timer_callback(struct repeating_timer *t) {
+    g_floppy->processStepperMotor();
+    return true; // Връща true, за да продължи таймерът
+}
+
 int main()
 {
     // Overclock Pico 2 (RP2350) to 200MHz for better performance
@@ -280,6 +285,11 @@ int main()
     //g_floppy->startWriteIRQTimer();
 
 //    uint8_t writeENState = 0;
+
+
+    static repeating_timer_t motorTimer;
+    add_repeating_timer_us(-1000, timer_callback, NULL, &motorTimer);
+
 
     while (true) {
       

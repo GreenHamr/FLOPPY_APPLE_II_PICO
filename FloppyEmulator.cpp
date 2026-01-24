@@ -27,9 +27,9 @@ static uint slice_num;
 // GPIO IRQ handler for WRITE_EN and WRITE pins (reacts to both rising and falling edges)
 // This allows us to detect when the write head is activated (WRITE_EN = 1)
 // and flux transitions on the WRITE pin
-void writeEnableIRQHandler(uint gpio, uint32_t events) {
+void MotorIRQHandler(uint gpio, uint32_t events) {
     if (!g_floppyEmulatorInstance) {
-        printf("ERROR: writeEnableIRQHandler() - g_floppyEmulatorInstance is null\r\n");
+        printf("ERROR: MotorIRQHandler() - g_floppyEmulatorInstance is null\r\n");
         return;
     }
 
@@ -37,12 +37,9 @@ void writeEnableIRQHandler(uint gpio, uint32_t events) {
         return;
     }
     // Check which pin triggered the IRQ
-    if (gpio == GPIO_WRITE) {
-        g_floppyEmulatorInstance->handleWriteIRQ(events);
-    } else if (gpio == GPIO_WRITE_ENABLE) {
-        // Check if this is the WRITE pin
-        g_floppyEmulatorInstance->handleWriteEnableIRQ(events);
-    }
+    //printf("MotorIRQHandler: gpio=%d, events=%d\r\n", gpio, events);
+    //sleep_ms(4);
+    //g_floppyEmulatorInstance->processStepperMotor();
 }
 
 
@@ -250,11 +247,13 @@ void FloppyEmulator::init() {
     // Configure GPIO IRQ for WRITE_EN and WRITE pins to react to both rising and falling edges
     // This allows us to detect when the write head is activated (WRITE_EN = 1)
     // and flux transitions on the WRITE pin
-    gpio_set_irq_callback(writeEnableIRQHandler);
-    gpio_set_irq_enabled(writeEnablePin, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_enabled(writePin, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    irq_set_priority(IO_IRQ_BANK0, 0);
-    irq_set_enabled(IO_IRQ_BANK0, true);
+//    gpio_set_irq_callback(MotorIRQHandler);
+//    gpio_set_irq_enabled(GPIO_PH0, GPIO_IRQ_EDGE_RISE, true);
+//    gpio_set_irq_enabled(GPIO_PH1, GPIO_IRQ_EDGE_RISE, true);
+//    gpio_set_irq_enabled(GPIO_PH2, GPIO_IRQ_EDGE_RISE, true);
+//    gpio_set_irq_enabled(GPIO_PH3, GPIO_IRQ_EDGE_RISE, true);
+//    irq_set_priority(IO_IRQ_BANK0, 0);
+//    irq_set_enabled(IO_IRQ_BANK0, true);
     
     // Initialize GPIO2 for debug output (write timer toggle)
     //gpio_init(2);
@@ -415,6 +414,7 @@ void FloppyEmulator::detectStepperPhaseChange() {
     // Read all 4 phase pins at once (GPIO 6-9)
     // gpio_get_all() returns all GPIO states, shift right by GPIO_PH0 to get bits 6-9
     // Use volatile to ensure compiler doesn't optimize away reads
+    //printf("detectStepperPhaseChange: \r\n");
     volatile uint32_t gpio_all = gpio_get_all();
     uint8_t stp_pos = (gpio_all >> GPIO_PH0) & 0x0F;
     
@@ -1361,7 +1361,7 @@ void FloppyEmulator::process() {
     if (writeIrqTimerActive) {
         // Write in progress - only do critical operations
         // Stepper motor tracking is still needed for rotationPosition accuracy
-        processStepperMotor();
+//        processStepperMotor();
         // Update rotation position (needed for write bit positioning)
         updateRotationPosition();
         // Skip cache updates and other non-critical operations during write
@@ -1372,7 +1372,7 @@ void FloppyEmulator::process() {
     // This MUST run even when drive is not selected - we need to track position always
     // This is the highest priority - must catch all phase changes
     // Especially important for fast machine code operations like catalog
-    processStepperMotor();
+//    processStepperMotor();
     
     // PIO/DMA should run continuously - don't stop it based on drive selection
     // In real Apple II floppy drive, READ pin constantly outputs data when drive is spinning
@@ -1406,7 +1406,7 @@ void FloppyEmulator::process() {
     //printf("Diff: %d\r\n", diff);
     if (diff > 3000000) {
         lastTimeWriteCheck = get_absolute_time();
-        printf("Saving GCR cache to disk image... V0.3.0\r\n");
+        printf("AUTO Saving GCR cache to disk image... \r\n");
         saveGCRCacheToDiskImage();
     }
 
@@ -1670,6 +1670,7 @@ void FloppyEmulator::stopWritingProcedure() {
 //-----------------------------------------------
 //-----------------------------------------------
 //-----------------------------------------------
+/*
 void FloppyEmulator::addBitToRAWBuffer(uint8_t bit) {
     if (rawBitBufferIndex < RAW_BIT_BUFFER_SIZE) {
         rawBitData = (rawBitData << 1) | bit;
@@ -1682,8 +1683,9 @@ void FloppyEmulator::addBitToRAWBuffer(uint8_t bit) {
         }
     }
 }
+    */
 //-----------------------------------------------
-
+/*
 // Handle WRITE_EN GPIO IRQ - detects when write head is activated/deactivated
 // Called from GPIO IRQ handler when WRITE_EN pin changes state (rising or falling edge)
 // Write head is active when WRITE_EN = 1 (HIGH)
@@ -1700,7 +1702,8 @@ void FloppyEmulator::handleWriteEnableIRQ(uint32_t events) {
     
 }
 //..................................................................................................................................................
-
+*/
+/*
 // Handle WRITE pin GPIO IRQ - detects flux transitions on WRITE pin
 // Called from GPIO IRQ handler when WRITE pin changes state (rising or falling edge)
 void FloppyEmulator::handleWriteIRQ(uint32_t events) {
@@ -1714,6 +1717,7 @@ void FloppyEmulator::handleWriteIRQ(uint32_t events) {
     gpio_put(14, 0);
     (void)events;  // Suppress unused variable warning
 }
+    */
 //..................................................................................................................................................
 //..................................................................................................................................................
 

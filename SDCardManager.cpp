@@ -1,5 +1,6 @@
 #include "SDCardManager.h"
 #include "hardware/gpio.h"
+#include <cstdint>
 #include <stdio.h>
 #include <string.h>
 
@@ -14,6 +15,7 @@ SDCardManager::SDCardManager(spi_inst_t* spi, uint8_t cs, uint8_t mosi, uint8_t 
     initialized = false;
     cardPresent = false;
     fat32 = nullptr;
+    currentBaudrate = 0;
     
     // Initialize card detect pin if provided
     if (detectPin != 0xFF) {
@@ -25,7 +27,7 @@ SDCardManager::SDCardManager(spi_inst_t* spi, uint8_t cs, uint8_t mosi, uint8_t 
 }
 
 // Initialize SD card
-bool SDCardManager::init(bool verbose) {
+bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
     if (verbose) {
         printf("SD Init: Starting initialization...\r\n");
     }
@@ -294,14 +296,17 @@ set_block_size:
         sleep_ms(50);
     }
     
-    // Increase SPI speed for better performance
-    spi_set_baudrate(spiInstance, 1000000);  // 1MHz
+
+    initialized = true;
+
+    // Set SPI speed to specified maximum baudrate
+    currentBaudrate = maxBaudrate;
+    spi_set_baudrate(spiInstance, currentBaudrate);
     
     if (verbose) {
-        printf("SD Init: SPI speed increased to 1MHz\r\n");
+        printf("SD Init: SPI speed set to %u Hz (%.2f MHz)\r\n", 
+               currentBaudrate, currentBaudrate / 1000000.0f);
     }
-    
-    initialized = true;
     
     // Initialize FAT32 filesystem
     fat32 = new FAT32(this);
@@ -749,5 +754,244 @@ bool SDCardManager::readTrackFromFile(const char* filename, int track, uint8_t* 
     }
     
     return false;
+}
+
+// Test maximum read speed for SD card
+// This function is completely independent - it initializes the card, tests speeds, and deinitializes
+// Returns the maximum baudrate (in Hz) that can be used successfully
+uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
+    if (verbose) {
+        printf("SD Speed Test: Starting independent speed test...\r\n");
+        printf("SD Speed Test: Testing %u blocks per speed\r\n", testBlocks);
+    }
+    
+    // Save original state
+    bool wasInitialized = initialized;
+    
+    // Initialize SPI with low speed first
+    spi_init(spiInstance, 100000);  // Start with 100kHz
+    gpio_set_function(mosiPin, GPIO_FUNC_SPI);
+    gpio_set_function(misoPin, GPIO_FUNC_SPI);
+    gpio_set_function(sckPin, GPIO_FUNC_SPI);
+    
+    // Initialize CS pin
+    gpio_init(csPin);
+    gpio_set_dir(csPin, GPIO_OUT);
+    gpio_put(csPin, 1);  // Deselect (high = inactive)
+    sleep_ms(100);
+    
+    // Send 80+ clock cycles to initialize
+    deselectCard();
+    uint8_t dummy = 0xFF;
+    for (int i = 0; i < 20; i++) {
+        spi_write_blocking(spiInstance, &dummy, 1);
+    }
+    sleep_ms(100);
+    
+    // Send CMD0 to reset card
+    selectCard();
+    uint8_t response = sendCommand(SD_CMD0, 0);
+    deselectCard();
+    sleep_ms(50);
+    
+    if (response == 0xFF || (response & 0xFE) != 0) {
+        if (verbose) {
+            printf("SD Speed Test: ERROR - CMD0 failed, response = 0x%02X\r\n", response);
+        }
+        // Restore original state
+        if (wasInitialized) {
+            initialized = true;
+        }
+        return 0;
+    }
+    
+    // Try CMD8 (for SDHC/SDXC cards)
+    bool isSDHC = false;
+    selectCard();
+    response = sendCommand(SD_CMD8, 0x1AA);
+    
+    if (response == SD_R1_IDLE) {
+        uint8_t r7[4];
+        for (int i = 0; i < 4; i++) {
+            spi_read_blocking(spiInstance, 0xFF, &r7[i], 1);
+        }
+        if (r7[2] == 0x01 && r7[3] == 0xAA) {
+            isSDHC = true;
+        }
+    }
+    deselectCard();
+    sleep_ms(50);
+    
+    bool isMMC = (response == 0x09);
+    
+    // Initialize card with ACMD41 (or CMD1 for MMC)
+    uint32_t acmd41Arg = isSDHC ? 0x40000000 : 0x00000000;
+    
+    if (isMMC) {
+        selectCard();
+        for (int i = 0; i < 200; i++) {
+            response = sendCommand(1, 0x40FF8000);
+            if (response == 0) break;
+            sleep_ms(i < 10 ? 1 : 10);
+        }
+        deselectCard();
+    } else {
+        // Try ACMD41 for SD cards
+        selectCard();
+        for (int i = 0; i < 200; i++) {
+            uint8_t cmd55Response = sendCommand(SD_CMD55, 0);
+            if (cmd55Response != 0x01) {
+                deselectCard();
+                break;
+            }
+            response = sendCommand(SD_ACMD41, acmd41Arg);
+            if (response == 0) break;
+            sleep_ms(i < 10 ? 1 : 10);
+        }
+        deselectCard();
+    }
+    
+    if (response != 0) {
+        if (verbose) {
+            printf("SD Speed Test: ERROR - Card initialization failed\r\n");
+        }
+        // Restore original state
+        if (wasInitialized) {
+            initialized = true;
+        }
+        return 0;
+    }
+    
+    sleep_ms(50);
+    
+    // Set block size (only for standard SD cards)
+    if (!isSDHC) {
+        selectCard();
+        response = sendCommand(SD_CMD16, 512);
+        deselectCard();
+        if (response != 0) {
+            if (verbose) {
+                printf("SD Speed Test: ERROR - CMD16 failed\r\n");
+            }
+            // Restore original state
+            if (wasInitialized) {
+                initialized = true;
+            }
+            return 0;
+        }
+        sleep_ms(50);
+    }
+    
+    // Card is now initialized for testing
+    // Set initialized flag so readBlock() will work
+    initialized = true;
+    
+    if (verbose) {
+        printf("SD Speed Test: Card initialized, starting speed tests...\r\n");
+    }
+    
+    // First, test at low speed to verify card is working
+    spi_set_baudrate(spiInstance, 1000000);  // 1MHz
+    sleep_ms(10);
+    
+    uint8_t testBuffer[SD_BLOCK_SIZE];
+    if (!readBlock(0, testBuffer)) {
+        if (verbose) {
+            printf("SD Speed Test: ERROR - Cannot read block 0 at 1MHz (card may not be ready)\r\n");
+        }
+        // Restore original state
+        if (wasInitialized) {
+            initialized = true;
+        }
+        return 0;
+    }
+    
+    if (verbose) {
+        printf("SD Speed Test: Verified card is readable at 1MHz\r\n");
+    }
+    
+    // Test speeds (in Hz): 1MHz, 2MHz, 5MHz, 10MHz, 15MHz, 20MHz, 25MHz, 30MHz, 40MHz, 50MHz
+    uint32_t testSpeeds[] = {
+        1000000,   // 1 MHz
+        2000000,   // 2 MHz
+        5000000,   // 5 MHz
+        10000000,  // 10 MHz
+        15000000,  // 15 MHz
+        20000000,  // 20 MHz
+        25000000,  // 25 MHz
+        30000000,  // 30 MHz
+        40000000,  // 40 MHz
+        50000000   // 50 MHz
+    };
+    
+    uint32_t maxSuccessfulSpeed = 0;
+    
+    // Test each speed
+    for (uint32_t i = 0; i < sizeof(testSpeeds) / sizeof(testSpeeds[0]); i++) {
+        uint32_t testSpeed = testSpeeds[i];
+        
+        // Set SPI speed and wait for it to stabilize
+        spi_set_baudrate(spiInstance, testSpeed);
+        sleep_ms(5);  // Small delay for speed change to take effect
+        
+        if (verbose) {
+            printf("SD Speed Test: Testing %u Hz (%.2f MHz)... ", testSpeed, testSpeed / 1000000.0f);
+        }
+        
+        // Test reading multiple blocks
+        bool allBlocksRead = true;
+        for (uint32_t block = 0; block < testBlocks; block++) {
+            // Try to read block (use block 0, 1, 2, etc. - these should always exist)
+            if (!readBlock(block, testBuffer)) {
+                allBlocksRead = false;
+                if (verbose) {
+                    printf("FAILED at block %u\r\n", block);
+                }
+                break;
+            }
+        }
+        
+        if (allBlocksRead) {
+            maxSuccessfulSpeed = testSpeed;
+            if (verbose) {
+                printf("OK\r\n");
+            }
+        } else {
+            // Stop testing higher speeds if this one failed
+            break;
+        }
+    }
+    
+    // Re-sync with card after testing
+    deselectCard();
+    sleep_ms(10);
+    uint8_t syncByte = 0xFF;
+    for (int i = 0; i < 20; i++) {
+        spi_write_blocking(spiInstance, &syncByte, 1);
+    }
+    waitForReady();
+    sleep_ms(20);
+    
+    // Deinitialize card (deselect and reset SPI)
+    deselectCard();
+    sleep_ms(50);
+    
+    // Restore original state
+    if (wasInitialized) {
+        initialized = true;
+    } else {
+        initialized = false;
+    }
+    
+    if (verbose) {
+        if (maxSuccessfulSpeed > 0) {
+            printf("SD Speed Test: Maximum successful speed: %u Hz (%.2f MHz)\r\n", 
+                   maxSuccessfulSpeed, maxSuccessfulSpeed / 1000000.0f);
+        } else {
+            printf("SD Speed Test: No successful speed found\r\n");
+        }
+    }
+    
+    return maxSuccessfulSpeed;
 }
 

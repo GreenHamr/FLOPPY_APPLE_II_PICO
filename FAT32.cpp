@@ -903,6 +903,40 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
 }
 
 // List files in current directory
+// Helper function to check if file has allowed extension (case-insensitive)
+static bool hasAllowedExtension(const char* filename, const char* ext1, const char* ext2) {
+    if (!filename) return false;
+    
+    // Find the last dot in filename
+    const char* lastDot = strrchr(filename, '.');
+    if (!lastDot) return false;  // No extension found
+    
+    // Get extension (skip the dot)
+    const char* ext = lastDot + 1;
+    
+    // Case-insensitive comparison with first extension
+    int i = 0;
+    while (ext[i] != '\0' && ext1[i] != '\0') {
+        char c1 = (ext[i] >= 'A' && ext[i] <= 'Z') ? (ext[i] + 32) : ext[i];
+        char c2 = (ext1[i] >= 'A' && ext1[i] <= 'Z') ? (ext1[i] + 32) : ext1[i];
+        if (c1 != c2) break;
+        i++;
+    }
+    if (ext[i] == '\0' && ext1[i] == '\0') return true;
+    
+    // Case-insensitive comparison with second extension
+    i = 0;
+    while (ext[i] != '\0' && ext2[i] != '\0') {
+        char c1 = (ext[i] >= 'A' && ext[i] <= 'Z') ? (ext[i] + 32) : ext[i];
+        char c2 = (ext2[i] >= 'A' && ext2[i] <= 'Z') ? (ext2[i] + 32) : ext2[i];
+        if (c1 != c2) break;
+        i++;
+    }
+    if (ext[i] == '\0' && ext2[i] == '\0') return true;
+    
+    return false;
+}
+
 bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
     if (!sdCard || !fileList) {
         return false;
@@ -1000,8 +1034,19 @@ bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
                 filename[nameIdx] = 0;
             }
             
+            // Check if it's a directory
+            bool isDirectory = (dirEntries[i].attributes & FAT32_ATTR_DIRECTORY) != 0;
+            
+            // Directories are always shown, files are filtered by extension
+            if (!isDirectory) {
+                // Filter: only show files with .dsk or .nic extension (case-insensitive)
+                if (!hasAllowedExtension(filename, "dsk", "nic")) {
+                    continue;
+                }
+            }
+            
             // Add directory indicator
-            const char* typeStr = (dirEntries[i].attributes & FAT32_ATTR_DIRECTORY) ? " <DIR>" : "";
+            const char* typeStr = isDirectory ? " <DIR>" : "";
             
             // Add to list (filename only, no size)
             int len = snprintf(fileList + listPos, maxSize - listPos, 

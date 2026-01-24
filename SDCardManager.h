@@ -37,6 +37,7 @@ private:
     uint8_t detectPin;  // Card detect pin (optional, 0xFF if not used)
     bool initialized;
     bool cardPresent;  // Last known card presence state
+    uint32_t currentBaudrate;  // Current SPI baudrate
     
     // FAT32 filesystem
     FAT32* fat32;
@@ -54,7 +55,7 @@ public:
     SDCardManager(spi_inst_t* spi, uint8_t cs, uint8_t mosi, uint8_t miso, uint8_t sck, uint8_t detect = 0xFF);
     
     // Initialization
-    bool init(bool verbose = false);
+    bool init(uint32_t maxBaudrate = 20000000, bool verbose = false);  // maxBaudrate in Hz (default 20MHz)
     void deinit();
     bool isInitialized() const;
     
@@ -78,6 +79,9 @@ public:
     
     // FAT32 access
     FAT32* getFAT32() const;
+    
+    // Speed testing
+    uint32_t testMaxReadSpeed(uint32_t testBlocks = 5, bool verbose = false);
 };
 
 #endif // SD_CARD_MANAGER_H

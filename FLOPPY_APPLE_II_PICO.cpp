@@ -117,7 +117,7 @@ int main()
     printf("Stepper phases (PH0-PH3) are now INPUTS (monitoring controller)\r\n");
     
     // Initialize SD card with hotplug support (static to avoid large stack allocation)
-    static SDCardManager sdCard(spi0, SD_SPI_CS, SD_SPI_MOSI, SD_SPI_MISO, SD_SPI_SCK, SD_CARD_DETECT);
+    static SDCardManager sdCard(SD_SPI_INSTANCE, SD_SPI_CS, SD_SPI_MOSI, SD_SPI_MISO, SD_SPI_SCK, SD_CARD_DETECT);
     
     printf("Initializing SD card with hotplug support...\r\n");
     printf("SD Card SPI: CS=GPIO%d, MOSI=GPIO%d, MISO=GPIO%d, SCK=GPIO%d\r\n", 
@@ -137,8 +137,13 @@ int main()
             }
             
             // Use verbose mode for detailed diagnostics
-            if (sdCard.init(true)) {
-                printf("SD card initialized successfully\r\n");
+            // Test max speed first, then initialize with that speed
+            uint32_t maxSpeed = sdCard.testMaxReadSpeed(10, true);
+            if (maxSpeed == 0) {
+                maxSpeed = 20000000;  // Default to 20MHz if test failed
+            }
+            if (sdCard.init(maxSpeed, true)) {
+                printf("SD card initialized successfully at %u Hz\r\n", maxSpeed/1000000);
                 sdInitialized = true;
                 break;
             }
@@ -336,8 +341,13 @@ int main()
                     if (currentCardState && !sdCard.isInitialized()) {
                         // Card inserted, try to initialize
                         printf("SD card inserted, initializing...\r\n");
-                        if (sdCard.init(false)) {  // Non-verbose for hotplug
-                            printf("SD card initialized successfully\r\n");
+                        // Test max speed first, then initialize with that speed
+                        uint32_t maxSpeed = sdCard.testMaxReadSpeed(20, true);
+                        if (maxSpeed == 0) {
+                            maxSpeed = 20000000;  // Default to 20MHz if test failed
+                        }
+                        if (sdCard.init(maxSpeed, false)) {  // Non-verbose for hotplug
+                            printf("SD card initialized successfully at %u Hz\r\n", maxSpeed/1000000);
                             if (g_cli) g_cli->setSDCardManager(&sdCard);
                             if (g_ui) g_ui->setSDCardManager(&sdCard);
                         } else {

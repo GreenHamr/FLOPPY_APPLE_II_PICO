@@ -68,7 +68,7 @@ public:
     void drawLine(int x0, int y0, int x1, int y1, uint16_t color = 0xFFFF);
     void drawRect(int x, int y, int w, int h, uint16_t color = 0xFFFF, bool filled = false);
     void fillRect(int x, int y, int w, int h, uint16_t color = 0xFFFF);
-    void drawBitmap(int x, int y, const uint8_t* bitmap, int w, int h, uint16_t color = 0xFFFF);
+    void drawBitmap(int x, int y, const uint16_t* bitmap, int w, int h, uint16_t color = 0xFFFF);
     
     // RGB565 color helpers
     static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b);

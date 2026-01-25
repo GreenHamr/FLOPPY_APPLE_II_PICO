@@ -11,6 +11,7 @@
 #include <pico/time.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include "PinConfig.h"
 #include "hardware/pwm.h"
 
@@ -193,6 +194,7 @@ FloppyEmulator::FloppyEmulator(
     // Initialize SD card and file management
     sdCardManager = nullptr;
     memset(currentFileName, 0, sizeof(currentFileName));
+    currentFileType = DISK_FILE_TYPE_DSK;  // Default to .dsk format
     
     // Clear disk image
     clearDiskImage();
@@ -838,9 +840,40 @@ void FloppyEmulator::setCurrentFileName(const char* filename) {
     if (filename) {
         strncpy(currentFileName, filename, sizeof(currentFileName) - 1);
         currentFileName[sizeof(currentFileName) - 1] = 0;
+        
+        // Determine file type based on extension (.dsk or .nic, case-insensitive)
+        const char* ext = strrchr(filename, '.');
+        if (ext != nullptr && strlen(ext) >= 4) {
+            // Case-insensitive comparison
+            char ext_lower[5] = {0};
+            for (int i = 0; i < 4 && ext[i+1] != '\0'; i++) {
+                ext_lower[i] = tolower(ext[i+1]);
+            }
+            
+            if (strcmp(ext_lower, "dsk") == 0) {
+                currentFileType = DISK_FILE_TYPE_DSK;
+            } else if (strcmp(ext_lower, "nic") == 0) {
+                currentFileType = DISK_FILE_TYPE_NIC;
+            } else {
+                // Unknown extension, default to .dsk
+                currentFileType = DISK_FILE_TYPE_DSK;
+            }
+        } else {
+            // No extension or invalid extension, default to .dsk
+            currentFileType = DISK_FILE_TYPE_DSK;
+        }
     } else {
         currentFileName[0] = 0;
+        currentFileType = DISK_FILE_TYPE_DSK;  // Reset to default
     }
+}
+
+const char* FloppyEmulator::getCurrentFileName() const {
+    return currentFileName;
+}
+
+DiskFileType FloppyEmulator::getCurrentFileType() const {
+    return currentFileType;
 }
 
 // Timer callback function for precise bit timing

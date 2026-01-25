@@ -321,12 +321,22 @@ void MSP1601::fillRect(int x, int y, int w, int h, uint16_t color) {
     }
 }
 
-void MSP1601::drawBitmap(int x, int y, const uint8_t* bitmap, int w, int h, uint16_t color) {
+void MSP1601::drawBitmap(int x, int y, const uint16_t* bitmap, int w, int h, uint16_t color) {
+    // Each uint16_t represents one row (up to 16 pixels)
+    // Bit format: MSB (bit 15) is leftmost pixel, LSB (bit 0) is rightmost pixel
+    // For width < 16, we use the leftmost 'w' bits
+    
     for (int j = 0; j < h; j++) {
+        // Get the row data (one uint16_t per row)
+        uint16_t rowData = bitmap[j];
+        
         for (int i = 0; i < w; i++) {
-            int byteIndex = (j * w + i) / 8;
-            int bitIndex = (j * w + i) % 8;
-            if (bitmap[byteIndex] & (1 << bitIndex)) {
+            // Calculate bit index: MSB first (bit 15 is pixel 0, bit 14 is pixel 1, etc.)
+            // For width w, we use bits 15 down to (16-w)
+            int bitIndex = 15 - i;
+            
+            // Check if bit is set
+            if (rowData & (1 << bitIndex)) {
                 setPixel(x + i, y + j, color);
             } else {
                 setPixel(x + i, y + j, 0x0000);

@@ -68,7 +68,7 @@ void Display::fillRect(int x, int y, int w, int h, bool color) {
 #endif
 }
 
-void Display::drawBitmap(int x, int y, const uint8_t* bitmap, int w, int h, bool color) {
+void Display::drawBitmap(int x, int y, const uint16_t* bitmap, int w, int h, bool color) {
 #ifdef USE_MSP1601
     display->drawBitmap(x, y, bitmap, w, h, color ? 0xFFFF : 0x0000);
 #else

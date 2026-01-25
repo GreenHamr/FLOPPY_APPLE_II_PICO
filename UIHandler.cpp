@@ -332,29 +332,33 @@ static const uint8_t iconDisk[] = {
 };
 */
 // SD card icon (8x8) - simplified rectangular card
-static const uint8_t iconSD[] = {
-    0x1F,  // 11111111 - top edge
-    0x35,  // 10000001 - left/right edges
-    0x75,  // 10100101 - with cut corner pattern
-    0x7F,  // 10100101
-    0x3F,  // 10100101
-    0x3F,  // 10000001 - left/right edges
-    0x7F,  // 10000001
-    0x7F   // 11111111 - bottom edge
+// Bitmap format: each byte represents 8 pixels horizontally (MSB first)
+static const uint16_t iconSD[] = {
+    0x1F00,  // 00011111 - top edge
+    0x3500,  // 00101010 - left/right edges
+    0x7500,  // 01010101 - with cut corner pattern
+    0x7F00,  // 01111111
+    0x3F00,  // 00111111
+    0x3F00,  // 00111111
+    0x7F00,  // 01111111
+    0x7F00   // 01111111
 };
 
-// Diskette icon (8x8) - floppy disk with label
-static const uint8_t iconDisk[] = {
-    0xFF,  // 01111110 - top edge
-    0xE7,  // 01000010 - sides
-    0xC2,  // 01011010 - with label lines
-    0xC3,  // 01011010 - label
-    0xE7,  // 01000010 - sides
-    0xFF,  // 01000010 - sides
-    0xE7,  // 01111110 - bottom edge
-    0xE7   // 00111100 - metal shutter
+// Diskette icon (10x10) - floppy disk with label
+// Bitmap format: each uint16_t represents one row (10 pixels in bits 15-6, MSB first)
+// Bit 15 = leftmost pixel, bit 6 = rightmost pixel
+static const uint16_t iconDisk[] = {
+    0x0000,  // 0000000000 - top edge (row 0, bits 15-6)
+    0x7F80,  // 0111111110 - top edge (row 1, bits 15-6)
+    0x7380,  // 0111001110 - sides with notch (row 2)
+    0x6180,  // 0110000110 - sides (row 3)
+    0x6180,  // 0110000110 - sides (row 4)
+    0x7380,  // 0111001110 - sides with notch (row 5)
+    0x7F80,  // 0111111110 - bottom edge (row 6)
+    0x7380,  // 0111001110 - metal shutter (row 7)
+    0x7380,  // 0111001110 - metal shutter (row 8)
+    0x0000   // 0000000000 - bottom edge (row 9)
 };
-
 
 void UIHandler::renderStatusBar() {
     // Clear status bar area (upper 16 pixels)
@@ -403,7 +407,7 @@ void UIHandler::renderStatusBar() {
         display->drawBitmap(xPos, 4, iconSD, 8, 8, true);  // SD card icon at y=4 (centered in 16px bar)
         xPos -= 10;  // Move left for disk icon (8 pixels + 2 spacing)
         if (loadedFileName[0] != 0) {
-            display->drawBitmap(xPos, 4, iconDisk, 8, 8, true);  // Disk icon
+            display->drawBitmap(xPos-1, 3, iconDisk, 10, 10, !floppy->getGCRTrackCacheDirty());  // Disk icon
         }
     }
 }
@@ -477,12 +481,7 @@ void UIHandler::renderFileListScreen() {
                     int len = 0;
                     bool isSelected = (lineIndex == selectedIndex);
                     
-                    if (isSelected) {
-                        displayLine[len++] = '>';
-                    } else {
-                        displayLine[len++] = ' ';
-                    }
-                    
+                    // Don't add '>' prefix - we'll use inverted background instead
                     // Copy line content
                     char* p = lineStart;
                     while (p < line && len < 20) {
@@ -491,7 +490,17 @@ void UIHandler::renderFileListScreen() {
                     displayLine[len] = 0;
                     
                     int yPos = STATUS_BAR_HEIGHT + 12 + visibleIndex * 8;
-                    display->drawString(0, yPos, displayLine, true);
+                    
+                    // Draw inverted background rectangle for selected item
+                    if (isSelected) {
+                        // Fill rectangle with inverted color (white/true)
+                        display->fillRect(0, yPos, DISPLAY_WIDTH, 8, true);
+                        // Draw text with inverted color (black/false)
+                        display->drawString(0, yPos, displayLine, false);
+                    } else {
+                        // Draw text with normal color (white/true)
+                        display->drawString(0, yPos, displayLine, true);
+                    }
                     visibleIndex++;
                 }
                 lineIndex++;
@@ -515,16 +524,58 @@ void UIHandler::renderInfoScreen() {
     display->drawLine(0, STATUS_BAR_HEIGHT + 10, DISPLAY_WIDTH, STATUS_BAR_HEIGHT + 10, true);
     
     if (floppy) {
+        int yPos = STATUS_BAR_HEIGHT + 14;
+        
+        // File type and name
+        const char* fileName = floppy->getCurrentFileName();
+        DiskFileType fileType = floppy->getCurrentFileType();
+        
+        if (fileName && fileName[0] != 0) {
+            // Show file type
+            char typeStr[32];
+            const char* typeName = (fileType == DISK_FILE_TYPE_NIC) ? "NIC" : "DSK";
+            snprintf(typeStr, sizeof(typeStr), "Type: %s", typeName);
+            display->drawString(0, yPos, typeStr, true);
+            yPos += 8;
+            
+            // Show file name (truncate if too long)
+            char nameStr[64];
+            const char* nameOnly = strrchr(fileName, '/');
+            if (nameOnly) {
+                nameOnly++;  // Skip '/'
+            } else {
+                nameOnly = fileName;
+            }
+            // Truncate to fit display width (approximately 20 chars)
+            int nameLen = strlen(nameOnly);
+            if (nameLen > 20) {
+                snprintf(nameStr, sizeof(nameStr), "%.17s...", nameOnly);
+            } else {
+                snprintf(nameStr, sizeof(nameStr), "%s", nameOnly);
+            }
+            display->drawString(0, yPos, nameStr, true);
+            yPos += 8;
+        } else {
+            display->drawString(0, yPos, "No file loaded", true);
+            yPos += 8;
+        }
+        
+        // Current track
+        char trackStr[32];
+        snprintf(trackStr, sizeof(trackStr), "Track: %d/34", floppy->getCurrentTrack());
+        display->drawString(0, yPos, trackStr, true);
+        yPos += 8;
+        
+        // Disk size
         char sizeStr[32];
         snprintf(sizeStr, sizeof(sizeStr), "Size: %u KB", floppy->getDiskImageSize() / 1024);
-        display->drawString(0, STATUS_BAR_HEIGHT + 14, sizeStr, true);
+        display->drawString(0, yPos, sizeStr, true);
+        yPos += 8;
         
-        char trackStr[32];
-        snprintf(trackStr, sizeof(trackStr), "Tracks: 35");
-        display->drawString(0, STATUS_BAR_HEIGHT + 22, trackStr, true);
-        
-        display->drawString(0, STATUS_BAR_HEIGHT + 30, "Sectors: 16/track", true);
-        display->drawString(0, STATUS_BAR_HEIGHT + 38, "256 bytes/sector", true);
+        // Cache status (if dirty)
+        if (floppy->getGCRTrackCacheDirty()) {
+            display->drawString(0, yPos, "Modified", true);
+        }
     }
 }
 

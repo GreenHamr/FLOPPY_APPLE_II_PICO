@@ -56,6 +56,12 @@ typedef enum {
     STEPPER_DIR_OUTWARD = 1    // Move away from track 0
 } StepperDirection;
 
+// Disk image file type
+typedef enum {
+    DISK_FILE_TYPE_DSK = 0,    // .dsk file format
+    DISK_FILE_TYPE_NIC = 1     // .nic file format
+} DiskFileType;
+
 // Forward declaration
 class SDCardManager;
 
@@ -132,6 +138,7 @@ private:
     // SD card and file management
     SDCardManager* sdCardManager;    // Pointer to SD card manager (for saving tracks to file)
     char currentFileName[64];        // Current disk image filename (for saving tracks)
+    DiskFileType currentFileType;     // Type of loaded disk image file (.dsk or .nic)
     
     // PIO/DMA for continuous bit output
     PIO pio;                        // PIO instance (pio0 or pio1)
@@ -251,6 +258,8 @@ public:
     // SD card and file management
     void setSDCardManager(SDCardManager* sdCard);  // Set SD card manager for saving tracks
     void setCurrentFileName(const char* filename);  // Set current disk image filename
+    const char* getCurrentFileName() const;  // Get current disk image filename
+    DiskFileType getCurrentFileType() const;  // Get current disk image file type
 };
 
 #endif // FLOPPY_EMULATOR_H

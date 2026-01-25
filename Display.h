@@ -40,7 +40,7 @@ public:
     void drawLine(int x0, int y0, int x1, int y1, bool color = true);
     void drawRect(int x, int y, int w, int h, bool color = true, bool filled = false);
     void fillRect(int x, int y, int w, int h, bool color = true);
-    void drawBitmap(int x, int y, const uint8_t* bitmap, int w, int h, bool color = true);
+    void drawBitmap(int x, int y, const uint16_t* bitmap, int w, int h, bool color = true);
     
     DisplayClass* getDisplay() { return display; }
 };

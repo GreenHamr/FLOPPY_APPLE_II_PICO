@@ -17,6 +17,8 @@
 #include "Display.h"
 #include "RotaryEncoder.h"
 #include "UIHandler.h"
+#include "hardware/irq.h"
+#include "hardware/timer.h"
 
 // Global instances of UI and CLI handlers
 static CLIHandler* g_cli = nullptr;
@@ -81,7 +83,9 @@ void core1_process() {
 }
 
 bool timer_callback(struct repeating_timer *t) {
+    //gpio_put(14, 1);
     g_floppy->processStepperMotor();
+    //gpio_put(14, 0);
     return true; // Връща true, за да продължи таймерът
 }
 
@@ -288,8 +292,10 @@ int main()
 
 
     static repeating_timer_t motorTimer;
-    add_repeating_timer_us(-1000, timer_callback, NULL, &motorTimer);
-
+    add_repeating_timer_us(-500, timer_callback, NULL, &motorTimer);
+    // Set maximum priority (0 = highest) for timer IRQ used by repeating timer
+    // Repeating timers use hardware timer IRQ 0 in Pico SDK
+    irq_set_priority(0, 0);
 
     while (true) {
       

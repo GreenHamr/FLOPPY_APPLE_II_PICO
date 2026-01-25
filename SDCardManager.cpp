@@ -992,6 +992,6 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
         }
     }
     
-    return maxSuccessfulSpeed;
+    return maxSuccessfulSpeed ;
 }
 

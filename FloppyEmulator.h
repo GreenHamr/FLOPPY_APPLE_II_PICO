@@ -117,6 +117,8 @@ private:
     
     // GCR track cache - pre-encoded GCR data for current track
     // This allows fast bit access in interrupt handler without expensive GCR encoding
+    uint8_t gcrTrackCache_tmp[APPLE_II_GCR_BYTES_PER_TRACK];
+
     uint8_t gcrTrackCache[APPLE_II_GCR_BYTES_PER_TRACK];
     int gcrTrackCacheTrack;         // Track number for which cache is valid (-1 = invalid)
     uint32_t gcrTrackCacheBits;     // Number of GCR bits in cache (48 bits per 5-byte group)

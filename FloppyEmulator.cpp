@@ -1389,6 +1389,9 @@ void FloppyEmulator::process() {
 */        
         // Don't abort DMA here - it will restart with new cache when current cycle completes
         // This avoids interruptions in the continuous stream
+        //gpio_put(14, 1);
+        //sdCardManager->readTrackFromFile(currentFileName, currentTrack, gcrTrackCache_tmp, APPLE_II_GCR_BYTES_PER_TRACK);
+        //gpio_put(14, 0);
         updateGCRTrackCache();
     }
    

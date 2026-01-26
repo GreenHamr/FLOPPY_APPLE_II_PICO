@@ -24,6 +24,7 @@ UIHandler::UIHandler(Display* disp, RotaryEncoder* enc) {
     lastUpdateTime = get_absolute_time();
     loadingEndTime = get_absolute_time();
     needsRefresh = true;
+    sdErrorType = SD_ERROR_NONE;
 }
 
 UIHandler::~UIHandler() {
@@ -79,6 +80,12 @@ void UIHandler::update() {
                 break;
             case UI_SCREEN_LOADING:
                 // Loading screen is rendered explicitly with message
+                break;
+            case UI_SCREEN_NO_SD_CARD:
+                renderNoSDCardScreen();
+                break;
+            case UI_SCREEN_SD_ERROR:
+                renderSDErrorScreen();
                 break;
         }
         display->update();
@@ -586,27 +593,69 @@ void UIHandler::renderStatusScreen() {
     renderStatusBar();
     
     // Detailed status in lower section
-    display->drawString(0, STATUS_BAR_HEIGHT + 2, "Status Details", true);
+    display->drawString(0, STATUS_BAR_HEIGHT + 2, "SD Card Info", true);
     display->drawLine(0, STATUS_BAR_HEIGHT + 10, DISPLAY_WIDTH, STATUS_BAR_HEIGHT + 10, true);
     
-    if (floppy) {
-        char trackStr[32];
-        snprintf(trackStr, sizeof(trackStr), "Track: %d", floppy->getCurrentTrack());
-        display->drawString(0, STATUS_BAR_HEIGHT + 14, trackStr, true);
-        
-        char selStr[32];
-        snprintf(selStr, sizeof(selStr), "Selected: %s", floppy->isDriveSelected() ? "Yes" : "No");
-        display->drawString(0, STATUS_BAR_HEIGHT + 22, selStr, true);
-        
-        char track0Str[32];
-        snprintf(track0Str, sizeof(track0Str), "Track 0: %s", floppy->isAtTrack0() ? "Yes" : "No");
-        display->drawString(0, STATUS_BAR_HEIGHT + 30, track0Str, true);
-    }
+    int yPos = STATUS_BAR_HEIGHT + 14;
     
-    if (sdCard) {
-        char sdStr[32];
-        snprintf(sdStr, sizeof(sdStr), "SD Card: %s", sdCard->isInitialized() ? "OK" : "Fail");
-        display->drawString(0, STATUS_BAR_HEIGHT + 38, sdStr, true);
+    if (sdCard && sdCard->isInitialized()) {
+        // SD Card status
+        display->drawString(0, yPos, "SD Card: OK", true);
+        yPos += 8;
+        
+        // SPI Speed
+        uint32_t speed = sdCard->getCurrentBaudrate();
+        char speedStr[32];
+        if (speed >= 1000000) {
+            snprintf(speedStr, sizeof(speedStr), "Speed: %u MHz", speed / 1000000);
+        } else {
+            snprintf(speedStr, sizeof(speedStr), "Speed: %u kHz", speed / 1000);
+        }
+        display->drawString(0, yPos, speedStr, true);
+        yPos += 8;
+        
+        // FAT32 info
+        FAT32* fat32 = sdCard->getFAT32();
+        if (fat32) {
+            // Volume label
+            const char* label = fat32->getVolumeLabel();
+            if (label && label[0] != '\0') {
+                char labelStr[32];
+                snprintf(labelStr, sizeof(labelStr), "Label: %s", label);
+                display->drawString(0, yPos, labelStr, true);
+                yPos += 8;
+            }
+            
+            // Total size
+            uint32_t sizeMB = fat32->getTotalSizeMB();
+            char sizeStr[32];
+            if (sizeMB >= 1024) {
+                snprintf(sizeStr, sizeof(sizeStr), "Size: %u.%u GB", sizeMB / 1024, (sizeMB % 1024) / 100);
+            } else {
+                snprintf(sizeStr, sizeof(sizeStr), "Size: %u MB", sizeMB);
+            }
+            display->drawString(0, yPos, sizeStr, true);
+            yPos += 8;
+            
+            // Partition info
+            uint32_t partStart = fat32->getPartitionStartSector();
+            if (partStart > 0) {
+                char partStr[32];
+                snprintf(partStr, sizeof(partStr), "Part@: %u", partStart);
+                display->drawString(0, yPos, partStr, true);
+                yPos += 8;
+            }
+            
+            // Cluster size
+            char clusterStr[32];
+            uint32_t clusterKB = fat32->getBytesPerCluster() / 1024;
+            snprintf(clusterStr, sizeof(clusterStr), "Cluster: %u KB", clusterKB);
+            display->drawString(0, yPos, clusterStr, true);
+        }
+    } else {
+        display->drawString(0, yPos, "SD Card: Not Found", true);
+        yPos += 8;
+        display->drawString(0, yPos, "Insert SD card", true);
     }
 }
 
@@ -619,5 +668,101 @@ void UIHandler::renderLoadingScreen(const char* message) {
     // Loading message in center of content area
     int yPos = STATUS_BAR_HEIGHT + (CONTENT_AREA_HEIGHT / 2) - 4;
     display->drawString(0, yPos, message, true);
+}
+
+void UIHandler::renderNoSDCardScreen() {
+    display->clear();
+    
+    // Center "NO SD CARD" message
+    int yPos = (DISPLAY_HEIGHT / 2) - 8;
+    
+    // Draw a box around the message
+    display->drawRect(10, yPos - 6, DISPLAY_WIDTH - 20, 24, true);
+    
+    display->drawString(20, yPos, "NO SD CARD", true);
+    display->drawString(16, yPos + 10, "Insert SD card", true);
+}
+
+void UIHandler::renderSDErrorScreen() {
+    display->clear();
+    
+    int yPos = 2;
+    
+    // Title
+    display->drawString(0, yPos, "SD Card Error", true);
+    display->drawLine(0, yPos + 9, DISPLAY_WIDTH, yPos + 9, true);
+    yPos += 12;
+    
+    // Error specific message
+    switch (sdErrorType) {
+        case SD_ERROR_EXFAT:
+            display->drawString(0, yPos, "exFAT detected!", true);
+            yPos += 10;
+            display->drawString(0, yPos, "Format as FAT32:", true);
+            yPos += 12;
+            display->drawString(0, yPos, "LINUX:", true);
+            yPos += 8;
+            display->drawString(0, yPos, "mkfs.vfat -F32 <dev>", true);
+            yPos += 12;
+            display->drawString(0, yPos, "WINDOWS:", true);
+            yPos += 8;
+            display->drawString(0, yPos, "format /FS:FAT32 X:", true);
+            break;
+            
+        case SD_ERROR_NTFS:
+            display->drawString(0, yPos, "NTFS detected!", true);
+            yPos += 10;
+            display->drawString(0, yPos, "Format as FAT32:", true);
+            yPos += 12;
+            display->drawString(0, yPos, "LINUX:", true);
+            yPos += 8;
+            display->drawString(0, yPos, "mkfs.vfat -F32 <dev>", true);
+            yPos += 12;
+            display->drawString(0, yPos, "WINDOWS:", true);
+            yPos += 8;
+            display->drawString(0, yPos, "format /FS:FAT32 X:", true);
+            break;
+            
+        case SD_ERROR_FAT12:
+        case SD_ERROR_FAT16:
+            display->drawString(0, yPos, "FAT12/16 detected", true);
+            yPos += 10;
+            display->drawString(0, yPos, "Please format as", true);
+            yPos += 8;
+            display->drawString(0, yPos, "FAT32", true);
+            break;
+            
+        case SD_ERROR_READ_FAILED:
+            display->drawString(0, yPos, "Read error!", true);
+            yPos += 10;
+            display->drawString(0, yPos, "Check SD card", true);
+            yPos += 8;
+            display->drawString(0, yPos, "or try another", true);
+            break;
+            
+        case SD_ERROR_UNKNOWN_FS:
+        default:
+            display->drawString(0, yPos, "Unknown format!", true);
+            yPos += 10;
+            display->drawString(0, yPos, "Format as FAT32", true);
+            break;
+    }
+}
+
+void UIHandler::showNoSDCard() {
+    currentScreen = UI_SCREEN_NO_SD_CARD;
+    needsRefresh = true;
+}
+
+void UIHandler::showSDError(SDErrorType errorType) {
+    sdErrorType = errorType;
+    currentScreen = UI_SCREEN_SD_ERROR;
+    needsRefresh = true;
+}
+
+void UIHandler::showMainMenu() {
+    currentScreen = UI_SCREEN_MAIN;
+    selectedIndex = 0;
+    needsRefresh = true;
 }
 

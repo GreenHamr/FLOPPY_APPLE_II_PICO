@@ -16,6 +16,7 @@ SDCardManager::SDCardManager(spi_inst_t* spi, uint8_t cs, uint8_t mosi, uint8_t 
     cardPresent = false;
     fat32 = nullptr;
     currentBaudrate = 0;
+    lastFAT32Error = FAT32_OK;
     
     // Initialize card detect pin if provided
     if (detectPin != 0xFF) {
@@ -32,8 +33,24 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
         printf("SD Init: Starting initialization...\r\n");
     }
     
-    // Initialize SPI with low speed first
-    spi_init(spiInstance, 100000);  // Start with 100kHz
+    // If already initialized, fully deinitialize first
+    if (initialized) {
+        if (verbose) {
+            printf("SD Init: Card already initialized, deinitializing first...\r\n");
+        }
+        deselectCard();
+        sleep_ms(100);
+        uint8_t dummyByte = 0xFF;
+        for (int i = 0; i < 100; i++) {
+            spi_write_blocking(spiInstance, &dummyByte, 1);
+        }
+        waitForReady();
+        sleep_ms(100);
+        initialized = false;
+    }
+    
+    // Initialize SPI with low speed first (100-400kHz for initialization)
+    spi_init(spiInstance, 400000);  // 400kHz for initialization (max allowed during init)
     gpio_set_function(mosiPin, GPIO_FUNC_SPI);
     gpio_set_function(misoPin, GPIO_FUNC_SPI);
     gpio_set_function(sckPin, GPIO_FUNC_SPI);
@@ -42,46 +59,54 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
     gpio_init(csPin);
     gpio_set_dir(csPin, GPIO_OUT);
     gpio_put(csPin, 1);  // Deselect (high = inactive)
-    sleep_ms(100);  // Wait longer for card to stabilize
+    sleep_ms(250);  // Wait longer for card to stabilize (especially for large capacity cards)
     
     if (verbose) {
         printf("SD Init: Sending 80+ clock cycles...\r\n");
     }
     
     // Send 80+ clock cycles to initialize (card needs this to wake up)
+    // SD spec requires at least 74 clock cycles with CS high
+    // We send more for better compatibility with various cards
     deselectCard();
     uint8_t dummy = 0xFF;
-    for (int i = 0; i < 20; i++) {  // Increased to 20 bytes (160 clock cycles)
+    for (int i = 0; i < 100; i++) {  // 800 clock cycles for better compatibility
         spi_write_blocking(spiInstance, &dummy, 1);
     }
-    sleep_ms(100);  // Longer delay
+    sleep_ms(100);
     
     if (verbose) {
         printf("SD Init: Sending CMD0 (reset)...\r\n");
     }
     
-    // Send CMD0 to reset card (go to idle state)
-    selectCard();
-    uint8_t response = sendCommand(SD_CMD0, 0);
-    deselectCard();
-    sleep_ms(50);  // Longer delay after CMD0
+    // Send CMD0 to reset card (go to idle state) with retries
+    // Some cards (especially SDXC) need multiple attempts
+    uint8_t response = 0xFF;
+    for (int retry = 0; retry < 10; retry++) {
+        selectCard();
+        response = sendCommand(SD_CMD0, 0);
+        deselectCard();
+        sleep_ms(50);
+        
+        if (response == 0x01) {  // IDLE state - success
+            break;
+        }
+        
+        // Send more clock cycles between retries
+        for (int i = 0; i < 20; i++) {
+            spi_write_blocking(spiInstance, &dummy, 1);
+        }
+        sleep_ms(50);
+    }
     
     if (verbose) {
         printf("SD Init: CMD0 response = 0x%02X\r\n", response);
     }
     
     // Check if card responded with idle state
-    // Response should be 0x01 (idle) or 0xFF (no response)
-    if (response == 0xFF) {
+    if (response != 0x01) {
         if (verbose) {
-            printf("SD Init: ERROR - No response to CMD0 (card not detected)\r\n");
-        }
-        return false;
-    }
-    
-    if ((response & 0xFE) != 0) {  // Any error bits set (except bit 0 = idle)
-        if (verbose) {
-            printf("SD Init: ERROR - CMD0 failed with error bits: 0x%02X\r\n", response);
+            printf("SD Init: ERROR - CMD0 failed, response = 0x%02X\r\n", response);
         }
         return false;
     }
@@ -89,13 +114,14 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
     // Try CMD8 (only for SDHC/SDXC cards, version 2.0+)
     // This command may fail for older cards, which is OK
     bool isSDHC = false;
+    bool isVersion2 = false;
     
     if (verbose) {
         printf("SD Init: Sending CMD8 (check voltage)...\r\n");
     }
     
     selectCard();
-    response = sendCommand(SD_CMD8, 0x1AA);
+    response = sendCommand(SD_CMD8, 0x1AA);  // 0x1AA = voltage check pattern
     
     if (verbose) {
         printf("SD Init: CMD8 response = 0x%02X\r\n", response);
@@ -114,28 +140,29 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
         
         // Check if voltage and check pattern match
         if (r7[2] == 0x01 && r7[3] == 0xAA) {
-            isSDHC = true;  // SDHC/SDXC card
+            isVersion2 = true;  // SD version 2.0+ (SDHC/SDXC capable)
             if (verbose) {
-                printf("SD Init: Detected SDHC/SDXC card\r\n");
+                printf("SD Init: Detected SD version 2.0+ card (SDHC/SDXC capable)\r\n");
             }
         }
     } else {
         if (verbose) {
-            printf("SD Init: CMD8 not supported (old card or MMC)\r\n");
+            printf("SD Init: CMD8 not supported (SD version 1.x or MMC)\r\n");
         }
     }
     deselectCard();
     sleep_ms(50);
     
     // Check if CMD8 failed with illegal command - might be MMC card
-    bool isMMC = (response == 0x09);  // Illegal command response to CMD8
+    bool isMMC = (response == 0x05 || response == 0x09);  // Illegal command response to CMD8
     
     if (isMMC && verbose) {
         printf("SD Init: Detected possible MMC card (CMD8 illegal)\r\n");
     }
     
-    // Try ACMD41 to initialize card (with HCS bit for SDHC)
-    uint32_t acmd41Arg = isSDHC ? 0x40000000 : 0x00000000;  // HCS bit for SDHC
+    // Try ACMD41 to initialize card (with HCS bit for version 2.0+ cards)
+    // HCS bit (Host Capacity Support) indicates we support SDHC/SDXC
+    uint32_t acmd41Arg = isVersion2 ? 0x40000000 : 0x00000000;  // HCS bit for SDHC/SDXC
     
     if (verbose) {
         printf("SD Init: Sending ACMD41 (initialize, arg=0x%08X)...\r\n", acmd41Arg);
@@ -147,7 +174,7 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
             printf("SD Init: Trying MMC initialization with CMD1...\r\n");
         }
         selectCard();
-        for (int i = 0; i < 200; i++) {
+        for (int i = 0; i < 500; i++) {  // More retries for large MMC cards
             response = sendCommand(1, 0x40FF8000);  // CMD1 for MMC (arg: voltage + busy)
             if (response == 0) {
                 if (verbose && i > 0) {
@@ -160,7 +187,7 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
             } else {
                 sleep_ms(10);
             }
-            if (verbose && (i == 0 || i == 9 || i == 49 || i == 99 || i == 199)) {
+            if (verbose && (i == 0 || i == 9 || i == 49 || i == 99 || i == 199 || i == 499)) {
                 printf("SD Init: CMD1 attempt %d, response = 0x%02X\r\n", i + 1, response);
             }
         }
@@ -177,15 +204,16 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
     }
     
     // Try ACMD41 for SD cards
+    // SDXC cards may need up to 1 second (1000ms) to initialize
     selectCard();
-    for (int i = 0; i < 200; i++) {  // Increased retries
+    for (int i = 0; i < 500; i++) {  // Increased retries for large capacity cards
         // First send CMD55 (app command prefix)
         uint8_t cmd55Response = sendCommand(SD_CMD55, 0);
         if (verbose && i == 0) {
             printf("SD Init: CMD55 response = 0x%02X\r\n", cmd55Response);
         }
         
-        if (cmd55Response != 0x01) {
+        if (cmd55Response != 0x01 && cmd55Response != 0x00) {
             // CMD55 failed - card might not support ACMD commands
             if (verbose) {
                 printf("SD Init: CMD55 failed, response = 0x%02X\r\n", cmd55Response);
@@ -194,7 +222,7 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
             break;
         }
         
-        // Now send ACMD41
+        // Now send ACMD41 with HCS bit
         response = sendCommand(SD_ACMD41, acmd41Arg);
         if (response == 0) {
             if (verbose && i > 0) {
@@ -202,12 +230,14 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
             }
             break;  // Card is ready
         }
-        if (i < 10) {
+        if (i < 20) {
             sleep_ms(1);  // Shorter delay for first attempts
+        } else if (i < 100) {
+            sleep_ms(10);  // Medium delay
         } else {
-            sleep_ms(10);  // Longer delay after initial attempts
+            sleep_ms(20);  // Longer delay for stubborn cards
         }
-        if (verbose && (i == 0 || i == 9 || i == 49 || i == 99 || i == 199)) {
+        if (verbose && (i == 0 || i == 9 || i == 49 || i == 99 || i == 199 || i == 499)) {
             printf("SD Init: ACMD41 attempt %d, response = 0x%02X\r\n", i + 1, response);
         }
     }
@@ -219,10 +249,10 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
         }
         // Try without HCS bit (for older cards)
         selectCard();
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 200; i++) {
             // Send CMD55 first
             uint8_t cmd55Response = sendCommand(SD_CMD55, 0);
-            if (cmd55Response != 0x01) {
+            if (cmd55Response != 0x01 && cmd55Response != 0x00) {
                 deselectCard();
                 break;
             }
@@ -232,6 +262,7 @@ bool SDCardManager::init(uint32_t maxBaudrate, bool verbose) {
                 if (verbose) {
                     printf("SD Init: ACMD41 succeeded without HCS after %d attempts\r\n", i + 1);
                 }
+                isVersion2 = false;  // Card doesn't support SDHC/SDXC
                 break;
             }
             sleep_ms(10);
@@ -251,7 +282,7 @@ set_block_size:
     
     sleep_ms(50);
     
-    // Send CMD58 to read OCR (optional, but helps verify card)
+    // Send CMD58 to read OCR (required to determine card capacity type)
     if (verbose) {
         printf("SD Init: Sending CMD58 (read OCR)...\r\n");
     }
@@ -262,14 +293,44 @@ set_block_size:
         for (int i = 0; i < 4; i++) {
             spi_read_blocking(spiInstance, 0xFF, &ocr[i], 1);
         }
+        
         if (verbose) {
             printf("SD Init: OCR = %02X %02X %02X %02X\r\n", ocr[0], ocr[1], ocr[2], ocr[3]);
-            if (ocr[0] & 0x80) {
+        }
+        
+        // Check card power up status (bit 31)
+        if (ocr[0] & 0x80) {
+            if (verbose) {
                 printf("SD Init: Card power up status: OK\r\n");
             }
+            
+            // Check CCS bit (bit 30) - Card Capacity Status
+            // CCS = 1 means SDHC/SDXC (block addressing)
+            // CCS = 0 means SDSC (byte addressing)
+            if (ocr[0] & 0x40) {
+                isSDHC = true;  // Card is SDHC or SDXC
+                if (verbose) {
+                    printf("SD Init: Card type: SDHC/SDXC (block addressing, 32GB+)\r\n");
+                    printf("SD Init: Card supports: V30/V60/V90 speed classes if labeled\r\n");
+                }
+            } else {
+                if (verbose) {
+                    printf("SD Init: Card type: SDSC (byte addressing, up to 2GB)\r\n");
+                }
+            }
+        } else {
+            if (verbose) {
+                printf("SD Init: WARNING - Card power up not complete\r\n");
+            }
         }
-        // Check if card supports 3.3V (bit 20)
-        // OCR[0] bit 7 = card power up status
+        
+        // Check voltage support
+        if (verbose) {
+            if (ocr[1] & 0x80) printf("SD Init: Supports 3.5-3.6V\r\n");
+            if (ocr[1] & 0x40) printf("SD Init: Supports 3.4-3.5V\r\n");
+            if (ocr[1] & 0x20) printf("SD Init: Supports 3.3-3.4V\r\n");
+            if (ocr[1] & 0x10) printf("SD Init: Supports 3.2-3.3V\r\n");
+        }
     } else {
         if (verbose) {
             printf("SD Init: CMD58 failed, response = 0x%02X\r\n", response);
@@ -279,10 +340,10 @@ set_block_size:
     sleep_ms(50);
     
     // Set block size to 512 bytes (CMD16) - only for standard SD cards
-    // SDHC/SDXC cards have fixed 512-byte blocks
+    // SDHC/SDXC cards have fixed 512-byte blocks and use block addressing
     if (!isSDHC) {
         if (verbose) {
-            printf("SD Init: Sending CMD16 (set block size)...\r\n");
+            printf("SD Init: Sending CMD16 (set block size to 512 bytes)...\r\n");
         }
         selectCard();
         response = sendCommand(SD_CMD16, 512);
@@ -294,6 +355,10 @@ set_block_size:
             return false;
         }
         sleep_ms(50);
+    } else {
+        if (verbose) {
+            printf("SD Init: SDHC/SDXC card detected - using block addressing (512-byte blocks)\r\n");
+        }
     }
     
 
@@ -313,11 +378,15 @@ set_block_size:
     
     // Initialize FAT32
     if (!fat32->init()) {
-        // FAT32 init failed, but SD card is still usable
+        // FAT32 init failed - save the error before deleting
+        lastFAT32Error = fat32->getLastError();
         delete fat32;
         fat32 = nullptr;
+        // Return false if FAT32 init failed (to trigger error screen)
+        return false;
     }
     
+    lastFAT32Error = FAT32_OK;
     return true;
 }
 
@@ -452,13 +521,12 @@ bool SDCardManager::readBlock(uint32_t blockAddress, uint8_t* buffer) {
     
     // Wait for data token (0xFE)
     uint8_t token = 0xFF;
-    for (int i = 0; i < 2000; i++) {  // Increased timeout
+    for (int i = 0; i < 5000; i++) {
         spi_read_blocking(spiInstance, 0xFF, &token, 1);
-        if (token == 0xFE) {  // Data token
+        if (token == 0xFE) {
             break;
         }
-        if (token != 0xFF) {
-            // Got some response, but not data token - might be error
+        if (token != 0xFF && token != 0x00) {
             break;
         }
     }
@@ -768,8 +836,8 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
     // Save original state
     bool wasInitialized = initialized;
     
-    // Initialize SPI with low speed first
-    spi_init(spiInstance, 100000);  // Start with 100kHz
+    // Initialize SPI with low speed first (400kHz for initialization)
+    spi_init(spiInstance, 400000);  // 400kHz for initialization
     gpio_set_function(mosiPin, GPIO_FUNC_SPI);
     gpio_set_function(misoPin, GPIO_FUNC_SPI);
     gpio_set_function(sckPin, GPIO_FUNC_SPI);
@@ -778,25 +846,38 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
     gpio_init(csPin);
     gpio_set_dir(csPin, GPIO_OUT);
     gpio_put(csPin, 1);  // Deselect (high = inactive)
-    sleep_ms(100);
+    sleep_ms(250);  // Longer delay for large capacity cards
     
-    // Send 80+ clock cycles to initialize
+    // Send 80+ clock cycles to initialize (more cycles for better compatibility)
     deselectCard();
     uint8_t dummy = 0xFF;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 100; i++) {  // 800 clock cycles
         spi_write_blocking(spiInstance, &dummy, 1);
     }
     sleep_ms(100);
     
-    // Send CMD0 to reset card
-    selectCard();
-    uint8_t response = sendCommand(SD_CMD0, 0);
-    deselectCard();
-    sleep_ms(50);
+    // Send CMD0 to reset card (with retries for large capacity cards)
+    uint8_t response = 0xFF;
+    for (int retry = 0; retry < 10; retry++) {
+        selectCard();
+        response = sendCommand(SD_CMD0, 0);
+        deselectCard();
+        sleep_ms(50);
+        
+        if (response == 0x01) {  // IDLE state - success
+            break;
+        }
+        
+        // Send more clock cycles between retries
+        for (int i = 0; i < 20; i++) {
+            spi_write_blocking(spiInstance, &dummy, 1);
+        }
+        sleep_ms(50);
+    }
     
-    if (response == 0xFF || (response & 0xFE) != 0) {
+    if (response != 0x01) {
         if (verbose) {
-            printf("SD Speed Test: ERROR - CMD0 failed, response = 0x%02X\r\n", response);
+            printf("SD Speed Test: ERROR - CMD0 failed after retries, response = 0x%02X\r\n", response);
         }
         // Restore original state
         if (wasInitialized) {
@@ -805,7 +886,8 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
         return 0;
     }
     
-    // Try CMD8 (for SDHC/SDXC cards)
+    // Try CMD8 (for SDHC/SDXC cards, version 2.0+)
+    bool isVersion2 = false;
     bool isSDHC = false;
     selectCard();
     response = sendCommand(SD_CMD8, 0x1AA);
@@ -816,37 +898,47 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
             spi_read_blocking(spiInstance, 0xFF, &r7[i], 1);
         }
         if (r7[2] == 0x01 && r7[3] == 0xAA) {
-            isSDHC = true;
+            isVersion2 = true;  // SD version 2.0+ (SDHC/SDXC capable)
+            if (verbose) {
+                printf("SD Speed Test: Detected SD version 2.0+ card\r\n");
+            }
         }
     }
     deselectCard();
     sleep_ms(50);
     
-    bool isMMC = (response == 0x09);
+    bool isMMC = (response == 0x05 || response == 0x09);
     
     // Initialize card with ACMD41 (or CMD1 for MMC)
-    uint32_t acmd41Arg = isSDHC ? 0x40000000 : 0x00000000;
+    // HCS bit is required for SDHC/SDXC cards
+    uint32_t acmd41Arg = isVersion2 ? 0x40000000 : 0x00000000;
     
     if (isMMC) {
         selectCard();
-        for (int i = 0; i < 200; i++) {
+        for (int i = 0; i < 500; i++) {  // More retries for large MMC cards
             response = sendCommand(1, 0x40FF8000);
             if (response == 0) break;
             sleep_ms(i < 10 ? 1 : 10);
         }
         deselectCard();
     } else {
-        // Try ACMD41 for SD cards
+        // Try ACMD41 for SD cards (SDXC may need up to 1 second)
         selectCard();
-        for (int i = 0; i < 200; i++) {
+        for (int i = 0; i < 500; i++) {  // More retries for large capacity cards
             uint8_t cmd55Response = sendCommand(SD_CMD55, 0);
-            if (cmd55Response != 0x01) {
+            if (cmd55Response != 0x01 && cmd55Response != 0x00) {
                 deselectCard();
                 break;
             }
             response = sendCommand(SD_ACMD41, acmd41Arg);
             if (response == 0) break;
-            sleep_ms(i < 10 ? 1 : 10);
+            if (i < 20) {
+                sleep_ms(1);
+            } else if (i < 100) {
+                sleep_ms(10);
+            } else {
+                sleep_ms(20);
+            }
         }
         deselectCard();
     }
@@ -864,7 +956,27 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
     
     sleep_ms(50);
     
+    // Read OCR to determine if card is SDHC/SDXC
+    selectCard();
+    response = sendCommand(SD_CMD58, 0);
+    if (response == 0) {
+        uint8_t ocr[4];
+        for (int i = 0; i < 4; i++) {
+            spi_read_blocking(spiInstance, 0xFF, &ocr[i], 1);
+        }
+        // Check CCS bit (bit 30) - Card Capacity Status
+        if (ocr[0] & 0x40) {
+            isSDHC = true;
+            if (verbose) {
+                printf("SD Speed Test: Card type: SDHC/SDXC (block addressing)\r\n");
+            }
+        }
+    }
+    deselectCard();
+    sleep_ms(50);
+    
     // Set block size (only for standard SD cards)
+    // SDHC/SDXC cards have fixed 512-byte blocks
     if (!isSDHC) {
         selectCard();
         response = sendCommand(SD_CMD16, 512);
@@ -880,6 +992,10 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
             return 0;
         }
         sleep_ms(50);
+    } else {
+        if (verbose) {
+            printf("SD Speed Test: SDHC/SDXC - using block addressing\r\n");
+        }
     }
     
     // Card is now initialized for testing
@@ -962,26 +1078,26 @@ uint32_t SDCardManager::testMaxReadSpeed(uint32_t testBlocks, bool verbose) {
         }
     }
     
-    // Re-sync with card after testing
+    // Fully deinitialize card after testing
+    // This ensures init() can properly reinitialize the card
     deselectCard();
-    sleep_ms(10);
+    sleep_ms(100);
+    
+    // Send many clock cycles to fully deselect and reset card state
     uint8_t syncByte = 0xFF;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 100; i++) {
         spi_write_blocking(spiInstance, &syncByte, 1);
     }
+    
+    // Wait for card to be ready
     waitForReady();
-    sleep_ms(20);
+    sleep_ms(100);
     
-    // Deinitialize card (deselect and reset SPI)
-    deselectCard();
-    sleep_ms(50);
+    // Reset SPI to low speed for next initialization
+    spi_set_baudrate(spiInstance, 400000);  // Reset to 400kHz
     
-    // Restore original state
-    if (wasInitialized) {
-        initialized = true;
-    } else {
-        initialized = false;
-    }
+    // Mark as not initialized so init() will fully reinitialize
+    initialized = false;
     
     if (verbose) {
         if (maxSuccessfulSpeed > 0) {

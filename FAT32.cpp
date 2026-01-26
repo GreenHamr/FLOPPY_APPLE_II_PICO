@@ -7,6 +7,7 @@
 // Constructor
 FAT32::FAT32(SDCardManager* sdCardManager) {
     sdCard = sdCardManager;
+    partitionStartSector = 0;
     memset(&bootSector, 0, sizeof(bootSector));
     fatStartSector = 0;
     dataStartSector = 0;
@@ -16,41 +17,232 @@ FAT32::FAT32(SDCardManager* sdCardManager) {
     currentDirCluster = 0;
     memset(currentPath, 0, sizeof(currentPath));
     strcpy(currentPath, "/");
+    lastError = FAT32_OK;
+}
+
+// Detect filesystem type from boot sector
+// Returns: 0 = unknown, 1 = FAT12, 2 = FAT16, 3 = FAT32, 4 = exFAT, 5 = NTFS
+static int detectFilesystemType(uint8_t* bootSectorBuffer) {
+    // Check for exFAT signature at offset 3
+    if (memcmp(bootSectorBuffer + 3, "EXFAT   ", 8) == 0) {
+        return 4;  // exFAT
+    }
+    
+    // Check for NTFS signature at offset 3
+    if (memcmp(bootSectorBuffer + 3, "NTFS    ", 8) == 0) {
+        return 5;  // NTFS
+    }
+    
+    // Check for valid boot sector signature (0x55AA at offset 510)
+    if (bootSectorBuffer[510] != 0x55 || bootSectorBuffer[511] != 0xAA) {
+        return 0;  // Unknown or unformatted
+    }
+    
+    // Check bytes per sector (offset 11-12, little endian)
+    uint16_t bytesPerSector = bootSectorBuffer[11] | (bootSectorBuffer[12] << 8);
+    if (bytesPerSector != 512 && bytesPerSector != 1024 && 
+        bytesPerSector != 2048 && bytesPerSector != 4096) {
+        return 0;  // Invalid sector size
+    }
+    
+    // Check for FAT32 signature at offset 82
+    if (memcmp(bootSectorBuffer + 82, "FAT32   ", 8) == 0) {
+        return 3;  // FAT32
+    }
+    
+    // Check for FAT16 signature at offset 54
+    if (memcmp(bootSectorBuffer + 54, "FAT16   ", 8) == 0) {
+        return 2;  // FAT16
+    }
+    
+    // Check for FAT12 signature at offset 54
+    if (memcmp(bootSectorBuffer + 54, "FAT12   ", 8) == 0) {
+        return 1;  // FAT12
+    }
+    
+    // Check for FAT signature at offset 54 (generic)
+    if (memcmp(bootSectorBuffer + 54, "FAT     ", 8) == 0) {
+        // Determine FAT type by checking sectors_per_fat_32 (offset 36-39)
+        uint32_t sectorsPerFat32 = bootSectorBuffer[36] | (bootSectorBuffer[37] << 8) |
+                                   (bootSectorBuffer[38] << 16) | (bootSectorBuffer[39] << 24);
+        if (sectorsPerFat32 != 0) {
+            return 3;  // FAT32 (has 32-bit sectors per FAT)
+        }
+        return 2;  // Assume FAT16
+    }
+    
+    // Check sectors_per_fat_32 field (offset 36-39) for FAT32 without signature
+    uint32_t sectorsPerFat32 = bootSectorBuffer[36] | (bootSectorBuffer[37] << 8) |
+                               (bootSectorBuffer[38] << 16) | (bootSectorBuffer[39] << 24);
+    uint16_t sectorsPerFat16 = bootSectorBuffer[22] | (bootSectorBuffer[23] << 8);
+    
+    if (sectorsPerFat32 != 0 && sectorsPerFat16 == 0) {
+        return 3;  // FAT32
+    }
+    
+    if (sectorsPerFat16 != 0) {
+        return 2;  // FAT16 or FAT12
+    }
+    
+    return 0;  // Unknown
+}
+
+// Parse MBR partition table and find first partition
+// Returns the start sector of the first partition, or 0 if no partition table
+static uint32_t findFirstPartition(uint8_t* mbrBuffer) {
+    // Check for valid MBR signature (0x55AA at offset 510)
+    if (mbrBuffer[510] != 0x55 || mbrBuffer[511] != 0xAA) {
+        return 0;  // No valid MBR
+    }
+    
+    // Check if this is an MBR (partition table at offset 446)
+    // or a VBR (Volume Boot Record - actual filesystem)
+    // MBR typically has 0x00 at offset 0, VBR has jump instruction (0xEB or 0xE9)
+    
+    // Check for filesystem signatures that indicate this is a VBR, not MBR
+    if (memcmp(mbrBuffer + 3, "MSDOS", 5) == 0 ||
+        memcmp(mbrBuffer + 3, "MSWIN", 5) == 0 ||
+        memcmp(mbrBuffer + 3, "mkdosfs", 7) == 0 ||
+        memcmp(mbrBuffer + 3, "EXFAT", 5) == 0 ||
+        memcmp(mbrBuffer + 3, "NTFS", 4) == 0 ||
+        memcmp(mbrBuffer + 54, "FAT", 3) == 0 ||
+        memcmp(mbrBuffer + 82, "FAT32", 5) == 0) {
+        return 0;  // This is a VBR (boot sector), not MBR
+    }
+    
+    // Parse partition table (4 entries starting at offset 446)
+    for (int i = 0; i < 4; i++) {
+        uint8_t* entry = mbrBuffer + 446 + (i * 16);
+        
+        // Partition type at offset 4
+        uint8_t partType = entry[4];
+        
+        // Skip empty partitions
+        if (partType == 0x00) {
+            continue;
+        }
+        
+        // Start LBA at offset 8 (little endian)
+        uint32_t startLBA = entry[8] | (entry[9] << 8) | 
+                           (entry[10] << 16) | (entry[11] << 24);
+        
+        // Accept FAT32, FAT16, exFAT, NTFS partition types
+        // 0x01 = FAT12
+        // 0x04 = FAT16 <32MB
+        // 0x06 = FAT16 >32MB
+        // 0x07 = NTFS/exFAT/HPFS
+        // 0x0B = FAT32 (CHS)
+        // 0x0C = FAT32 (LBA)
+        // 0x0E = FAT16 (LBA)
+        // 0x0F = Extended (LBA)
+        if (partType == 0x01 || partType == 0x04 || partType == 0x06 ||
+            partType == 0x07 || partType == 0x0B || partType == 0x0C ||
+            partType == 0x0E) {
+            return startLBA;
+        }
+    }
+    
+    return 0;  // No suitable partition found
 }
 
 // Initialize FAT32 filesystem
 bool FAT32::init() {
+    lastError = FAT32_OK;
+    
     if (!sdCard) {
+        lastError = FAT32_ERROR_NO_SDCARD;
         return false;
     }
     
-    // Read boot sector (sector 0)
+    // Read sector 0 (could be MBR or VBR)
+    uint8_t sectorBuffer[512];
+    memset(sectorBuffer, 0, 512);
+    
+    // Try multiple times to read sector 0
+    bool readSuccess = false;
+    for (int retry = 0; retry < 5; retry++) {
+        if (sdCard->readBlock(0, sectorBuffer)) {
+            readSuccess = true;
+            break;
+        }
+        sleep_ms(100);
+    }
+    
+    if (!readSuccess) {
+        lastError = FAT32_ERROR_READ_FAILED;
+        return false;
+    }
+    
+    // Check if this is an MBR with partition table
+    uint32_t partitionStart = findFirstPartition(sectorBuffer);
+    uint32_t bootSectorLBA = 0;
     uint8_t bootSectorBuffer[512];
-    if (!sdCard->readBlock(0, bootSectorBuffer)) {
+    
+    if (partitionStart > 0) {
+        // This is an MBR, read the actual boot sector from partition
+        bootSectorLBA = partitionStart;
+        
+        if (!sdCard->readBlock(partitionStart, bootSectorBuffer)) {
+            lastError = FAT32_ERROR_READ_FAILED;
+            return false;
+        }
+    } else {
+        // No partition table, sector 0 is the boot sector (superfloppy format)
+        bootSectorLBA = 0;
+        memcpy(bootSectorBuffer, sectorBuffer, 512);
+    }
+    
+    // Detect filesystem type
+    int fsType = detectFilesystemType(bootSectorBuffer);
+    
+    // Handle non-FAT32 filesystems
+    if (fsType == 4) {  // exFAT
+        lastError = FAT32_ERROR_EXFAT;
         return false;
     }
     
+    if (fsType == 5) {  // NTFS
+        lastError = FAT32_ERROR_NTFS;
+        return false;
+    }
+    
+    if (fsType == 1) {  // FAT12
+        lastError = FAT32_ERROR_FAT12;
+        return false;
+    }
+    
+    if (fsType == 2) {  // FAT16
+        lastError = FAT32_ERROR_FAT16;
+        return false;
+    }
+    
+    if (fsType == 0) {  // Unknown
+        lastError = FAT32_ERROR_UNKNOWN_FS;
+        return false;
+    }
+    
+    // At this point, fsType should be 3 (FAT32)
     memcpy(&bootSector, bootSectorBuffer, sizeof(FAT32_BootSector));
     
-    // Verify FAT32 signature
+    // Store partition start sector for all subsequent reads
+    partitionStartSector = bootSectorLBA;
+    
+    // Verify FAT32 parameters
     if (bootSector.bytes_per_sector != 512) {
-        return false;  // Only support 512 byte sectors
+        lastError = FAT32_ERROR_INVALID_PARAMS;
+        return false;
     }
     
-    // Check if it's FAT32 (fs_type should contain "FAT32")
-    if (strncmp((char*)bootSector.fs_type, "FAT32", 5) != 0 && 
-        strncmp((char*)bootSector.fs_type, "FAT", 3) != 0) {
-        // Try to detect by sectors_per_fat_32
-        if (bootSector.sectors_per_fat_32 == 0) {
-            return false;  // Not FAT32
-        }
+    if (bootSector.sectors_per_cluster == 0) {
+        lastError = FAT32_ERROR_INVALID_PARAMS;
+        return false;
     }
     
-    // Calculate FAT32 structure
+    // Calculate FAT32 structure (all sectors are relative to partition start)
     sectorsPerCluster = bootSector.sectors_per_cluster;
     bytesPerCluster = bootSector.bytes_per_sector * sectorsPerCluster;
     
-    // FAT start sector
+    // FAT start sector (relative to partition start)
     fatStartSector = bootSector.reserved_sectors;
     
     // Data start sector = reserved + (num_fats * sectors_per_fat)
@@ -67,10 +259,11 @@ bool FAT32::init() {
     return true;
 }
 
-// Get sector number for a cluster
+// Get sector number for a cluster (includes partition offset)
 uint32_t FAT32::getClusterSector(uint32_t cluster) {
     // First data cluster is 2, so subtract 2
-    return dataStartSector + ((cluster - 2) * sectorsPerCluster);
+    // Add partition start sector for absolute addressing
+    return partitionStartSector + dataStartSector + ((cluster - 2) * sectorsPerCluster);
 }
 
 // Read FAT entry for a cluster
@@ -81,7 +274,8 @@ uint32_t FAT32::readFATEntry(uint32_t cluster) {
     
     // FAT32 uses 4 bytes per entry
     uint32_t fatOffset = cluster * 4;
-    uint32_t fatSector = fatStartSector + (fatOffset / 512);
+    // Add partition start sector for absolute addressing
+    uint32_t fatSector = partitionStartSector + fatStartSector + (fatOffset / 512);
     uint32_t fatEntryOffset = fatOffset % 512;
     
     uint8_t fatBuffer[512];
@@ -526,6 +720,28 @@ uint32_t FAT32::getFileSize(const char* filename) {
         return entry.file_size;
     }
     return 0;
+}
+
+// Get volume label (returns static string)
+const char* FAT32::getVolumeLabel() const {
+    static char label[12];
+    memcpy(label, bootSector.volume_label, 11);
+    label[11] = '\0';
+    // Trim trailing spaces
+    for (int i = 10; i >= 0 && label[i] == ' '; i--) {
+        label[i] = '\0';
+    }
+    return label;
+}
+
+// Get total size in MB
+uint32_t FAT32::getTotalSizeMB() const {
+    uint32_t totalSectors = bootSector.total_sectors_32;
+    if (totalSectors == 0) {
+        totalSectors = bootSector.total_sectors_16;
+    }
+    // Calculate MB: sectors * 512 / (1024 * 1024) = sectors / 2048
+    return totalSectors / 2048;
 }
 
 // Read file

@@ -16,8 +16,22 @@ typedef enum {
     UI_SCREEN_FILE_LIST = 1,
     UI_SCREEN_INFO = 2,
     UI_SCREEN_STATUS = 3,
-    UI_SCREEN_LOADING = 4
+    UI_SCREEN_LOADING = 4,
+    UI_SCREEN_NO_SD_CARD = 5,
+    UI_SCREEN_SD_ERROR = 6
 } UIScreen;
+
+// SD Card error types
+typedef enum {
+    SD_ERROR_NONE = 0,
+    SD_ERROR_NOT_PRESENT = 1,
+    SD_ERROR_READ_FAILED = 2,
+    SD_ERROR_EXFAT = 3,
+    SD_ERROR_NTFS = 4,
+    SD_ERROR_FAT12 = 5,
+    SD_ERROR_FAT16 = 6,
+    SD_ERROR_UNKNOWN_FS = 7
+} SDErrorType;
 
 // Display layout constants (for SSD1306 split-screen displays)
 #ifndef USE_MSP1601
@@ -70,6 +84,11 @@ private:
     void renderInfoScreen();
     void renderStatusScreen();
     void renderLoadingScreen(const char* message);
+    void renderNoSDCardScreen();
+    void renderSDErrorScreen();
+    
+    // SD Card error state
+    SDErrorType sdErrorType;
     
     // Navigation
     void handleEncoderInput();
@@ -85,6 +104,11 @@ public:
     
     void update();  // Call this periodically in main loop
     void refresh();  // Force screen refresh
+    
+    // SD Card status screens
+    void showNoSDCard();
+    void showSDError(SDErrorType errorType);
+    void showMainMenu();  // Return to main menu after SD card is ready
 };
 
 #endif // UI_HANDLER_H

@@ -41,6 +41,7 @@ private:
     
     // FAT32 filesystem
     FAT32* fat32;
+    FAT32_Error lastFAT32Error;  // Store last FAT32 error (preserved even if FAT32 deleted)
     
     // Internal methods
     void selectCard();
@@ -79,9 +80,13 @@ public:
     
     // FAT32 access
     FAT32* getFAT32() const;
+    FAT32_Error getLastFAT32Error() const { return lastFAT32Error; }
     
     // Speed testing
     uint32_t testMaxReadSpeed(uint32_t testBlocks = 5, bool verbose = false);
+    
+    // Get current SPI speed in Hz
+    uint32_t getCurrentBaudrate() const { return currentBaudrate; }
 };
 
 #endif // SD_CARD_MANAGER_H

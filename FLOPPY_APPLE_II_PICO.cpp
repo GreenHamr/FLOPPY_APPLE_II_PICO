@@ -149,10 +149,10 @@ int main()
             // Test max speed first, then initialize with that speed
             uint32_t maxSpeed = sdCard.testMaxReadSpeed(10, true);
             if (maxSpeed == 0) {
-                maxSpeed = 20000000;  // Default to 20MHz if test failed
+                maxSpeed = 1000000;  // Default to 1MHz if test failed
             }
             if (sdCard.init(maxSpeed, true)) {
-                printf("SD card initialized successfully at %u Hz\r\n", maxSpeed/1000000);
+                printf("SD card initialized successfully at %u Hz\r\n", maxSpeed);
                 sdInitialized = true;
                 break;
             }
@@ -261,6 +261,23 @@ int main()
     g_ui->setFloppyEmulator(&floppy);
     if (sdInitialized) {
         g_ui->setSDCardManager(&sdCard);
+        g_ui->showMainMenu();
+    } else if (sdCard.isCardPresent()) {
+        // Card present but initialization failed - show error
+        FAT32_Error err = sdCard.getLastFAT32Error();
+        SDErrorType uiError = SD_ERROR_UNKNOWN_FS;
+        switch (err) {
+            case FAT32_ERROR_EXFAT: uiError = SD_ERROR_EXFAT; break;
+            case FAT32_ERROR_NTFS: uiError = SD_ERROR_NTFS; break;
+            case FAT32_ERROR_FAT12: uiError = SD_ERROR_FAT12; break;
+            case FAT32_ERROR_FAT16: uiError = SD_ERROR_FAT16; break;
+            case FAT32_ERROR_READ_FAILED: uiError = SD_ERROR_READ_FAILED; break;
+            default: uiError = SD_ERROR_UNKNOWN_FS; break;
+        }
+        g_ui->showSDError(uiError);
+    } else {
+        // No SD card present
+        g_ui->showNoSDCard();
     }
     printf("UI handler initialized\r\n");
     
@@ -363,16 +380,36 @@ int main()
                             maxSpeed = 20000000;  // Default to 20MHz if test failed
                         }
                         if (sdCard.init(maxSpeed, false)) {  // Non-verbose for hotplug
-                            printf("SD card initialized successfully at %u Hz\r\n", maxSpeed/1000000);
+                            printf("SD card initialized successfully at %u MHz\r\n", maxSpeed/1000000);
                             if (g_cli) g_cli->setSDCardManager(&sdCard);
-                            if (g_ui) g_ui->setSDCardManager(&sdCard);
+                            if (g_ui) {
+                                g_ui->setSDCardManager(&sdCard);
+                                g_ui->showMainMenu();  // Show main menu on successful init
+                            }
                         } else {
                             printf("SD card initialization failed\r\n");
+                            // Show error screen based on FAT32 error
+                            if (g_ui) {
+                                FAT32_Error err = sdCard.getLastFAT32Error();
+                                SDErrorType uiError = SD_ERROR_UNKNOWN_FS;
+                                switch (err) {
+                                    case FAT32_ERROR_EXFAT: uiError = SD_ERROR_EXFAT; break;
+                                    case FAT32_ERROR_NTFS: uiError = SD_ERROR_NTFS; break;
+                                    case FAT32_ERROR_FAT12: uiError = SD_ERROR_FAT12; break;
+                                    case FAT32_ERROR_FAT16: uiError = SD_ERROR_FAT16; break;
+                                    case FAT32_ERROR_READ_FAILED: uiError = SD_ERROR_READ_FAILED; break;
+                                    default: uiError = SD_ERROR_UNKNOWN_FS; break;
+                                }
+                                g_ui->showSDError(uiError);
+                            }
                         }
-                    } else if (!currentCardState && sdCard.isInitialized()) {
-                        // Card removed (handled in checkCardPresence)
+                    } else if (!currentCardState) {
+                        // Card removed
                         if (g_cli) g_cli->setSDCardManager(nullptr);
-                        if (g_ui) g_ui->setSDCardManager(nullptr);
+                        if (g_ui) {
+                            g_ui->setSDCardManager(nullptr);
+                            g_ui->showNoSDCard();  // Show "NO SD CARD" screen
+                        }
                     }
                 }
                 

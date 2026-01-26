@@ -4,6 +4,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// FAT32 initialization error codes
+typedef enum {
+    FAT32_OK = 0,
+    FAT32_ERROR_NO_SDCARD = 1,
+    FAT32_ERROR_READ_FAILED = 2,
+    FAT32_ERROR_EXFAT = 3,
+    FAT32_ERROR_NTFS = 4,
+    FAT32_ERROR_FAT12 = 5,
+    FAT32_ERROR_FAT16 = 6,
+    FAT32_ERROR_UNKNOWN_FS = 7,
+    FAT32_ERROR_INVALID_PARAMS = 8
+} FAT32_Error;
+
 // FAT32 Boot Sector structure
 typedef struct {
     uint8_t jump[3];
@@ -88,6 +101,9 @@ private:
     // Pointer to SDCardManager for reading blocks
     SDCardManager* sdCard;
     
+    // Partition offset (for MBR partitioned cards)
+    uint32_t partitionStartSector;
+    
     // FAT32 structure
     FAT32_BootSector bootSector;
     uint32_t fatStartSector;
@@ -99,6 +115,9 @@ private:
     // Current directory tracking
     uint32_t currentDirCluster;
     char currentPath[256];
+    
+    // Last error code
+    FAT32_Error lastError;
     
     // Internal methods
     bool readBootSector();
@@ -137,6 +156,16 @@ public:
     
     // Utility
     uint32_t getFileSize(const char* filename);
+    
+    // SD Card/Partition info getters
+    uint32_t getPartitionStartSector() const { return partitionStartSector; }
+    uint32_t getBytesPerCluster() const { return bytesPerCluster; }
+    uint32_t getSectorsPerCluster() const { return sectorsPerCluster; }
+    const char* getVolumeLabel() const;
+    uint32_t getTotalSizeMB() const;
+    
+    // Error handling
+    FAT32_Error getLastError() const { return lastError; }
 };
 
 #endif // FAT32_H

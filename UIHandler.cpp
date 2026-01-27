@@ -677,7 +677,7 @@ void UIHandler::renderNoSDCardScreen() {
     int yPos = (DISPLAY_HEIGHT / 2) - 8;
     
     // Draw a box around the message
-    display->drawRect(10, yPos - 6, DISPLAY_WIDTH - 20, 24, true);
+    display->drawRectEx(10, yPos - 6, DISPLAY_WIDTH - 20, 28, 3, true, true);
     
     display->drawString(20, yPos, "NO SD CARD", true);
     display->drawString(16, yPos + 10, "Insert SD card", true);

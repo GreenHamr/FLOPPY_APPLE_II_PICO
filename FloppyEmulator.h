@@ -22,8 +22,11 @@
 #define APPLE_II_ROTATION_TIME_MS  200     // One full rotation = 200ms (300 RPM)
 #define APPLE_II_ROTATION_TIME_US  (APPLE_II_ROTATION_TIME_MS * 1000)  // 200,000 microseconds
 #define APPLE_II_BITS_PER_ROTATION (APPLE_II_ROTATION_TIME_US / APPLE_II_BIT_PERIOD_US)  // 50,000 bits per rotation
-#define APPLE_II_DISK_SIZE         (APPLE_II_TRACKS * APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR)
-#define APPLE_II_BYTES_PER_TRACK   (APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR)  // 4096 bytes (raw data)
+#define APPLE_II_DISK_SIZE         (APPLE_II_TRACKS * APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR)  // 143360 bytes (DSK format)
+#define APPLE_II_NIC_DISK_SIZE     (APPLE_II_TRACKS * APPLE_II_SECTORS_PER_TRACK * 512)  // 286720 bytes (NIC format: 512 bytes per sector)
+#define APPLE_II_MAX_DISK_SIZE     APPLE_II_NIC_DISK_SIZE  // Maximum size to support both DSK and NIC formats
+#define APPLE_II_BYTES_PER_TRACK   (APPLE_II_SECTORS_PER_TRACK * APPLE_II_BYTES_PER_SECTOR)  // 4096 bytes (raw data for DSK)
+#define APPLE_II_NIC_BYTES_PER_TRACK (APPLE_II_SECTORS_PER_TRACK * 512)  // 8192 bytes per track in NIC file (but only 416 bytes per sector are used)
 #define APPLE_II_BITS_PER_TRACK    (APPLE_II_BYTES_PER_TRACK * 8)  // 32768 bits (raw)
 
 // Apple II Disk II track format:
@@ -68,7 +71,9 @@ class SDCardManager;
 class FloppyEmulator {
 private:
     // RAW disk image storage (linear array)
-    uint8_t diskImage[APPLE_II_DISK_SIZE];
+    // For DSK files: stores raw sector data (143360 bytes)
+    // For NIC files: stores GCR-encoded track data (286720 bytes, but only first 416 bytes per sector are used)
+    uint8_t diskImage[APPLE_II_MAX_DISK_SIZE];
     
     // Stepper motor control
     uint8_t stepperPhasePins[4];  // GPIO pins for PH0, PH1, PH2, PH3

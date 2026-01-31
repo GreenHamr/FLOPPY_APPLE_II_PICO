@@ -668,16 +668,24 @@ bool SDCardManager::loadDiskImage(const char* filename, uint8_t* buffer, uint32_
             return false;
         }
         
-        // Check if it's a .dsk file by extension
+        // Check if it's a .dsk or .nic file by extension
         bool isDSKFile = false;
+        bool isNICFile = false;
         const char* ext = strrchr(filename, '.');
-        if (ext && (ext[1] == 'd' || ext[1] == 'D') && 
-                   (ext[2] == 's' || ext[2] == 'S') && 
-                   (ext[3] == 'k' || ext[3] == 'K')) {
-            isDSKFile = true;
+        if (ext) {
+            if ((ext[1] == 'd' || ext[1] == 'D') && 
+                (ext[2] == 's' || ext[2] == 'S') && 
+                (ext[3] == 'k' || ext[3] == 'K')) {
+                isDSKFile = true;
+            } else if ((ext[1] == 'n' || ext[1] == 'N') && 
+                       (ext[2] == 'i' || ext[2] == 'I') && 
+                       (ext[3] == 'c' || ext[3] == 'C')) {
+                isNICFile = true;
+            }
         }
         
         // .dsk files are typically 143360 bytes (35 tracks * 16 sectors * 256 bytes)
+        // .nic files are 286720 bytes (35 tracks * 16 sectors * 512 bytes) - already in GCR format
         // If file is larger than expected, it might have a header (64 or 256 bytes)
         // Common headers: 64, 128, 256 bytes
         if (isDSKFile && fileSize > bufferSize) {
@@ -710,7 +718,24 @@ bool SDCardManager::loadDiskImage(const char* filename, uint8_t* buffer, uint32_
             }
         }
         
-        // Default: read file directly into buffer
+        // For NIC files, read entire file (286720 bytes) - already in GCR format
+        if (isNICFile) {
+            // NIC files are 286720 bytes, read directly into buffer
+            uint32_t bytesReadSoFar = 0;
+            uint32_t maxReadSize = bufferSize < fileSize ? bufferSize : fileSize;
+            if (!fat32->readFile(filename, buffer, maxReadSize, &bytesReadSoFar)) {
+                if (bytesRead) *bytesRead = 0;
+                return false;
+            }
+            
+            if (bytesRead) {
+                *bytesRead = bytesReadSoFar;
+            }
+            
+            return bytesReadSoFar > 0;
+        }
+        
+        // Default: read file directly into buffer (for DSK files)
         // This works for:
         // - .dsk files that are exactly 143360 bytes (no header, already RAW format)
         // - Any other file format (RAW format)
@@ -769,10 +794,19 @@ bool SDCardManager::saveTrackToFile(const char* filename, int track, const uint8
         // and findFile() searches in the current directory context
         
         // Calculate offset in file: track * bytes per track
-        // Apple II disk format: 35 tracks * 16 sectors * 256 bytes = 143360 bytes total
-        // Each track is 4096 bytes (16 sectors * 256 bytes)
-        const uint32_t BYTES_PER_TRACK = 16 * 256;  // 4096 bytes per track
-        uint32_t offset = track * BYTES_PER_TRACK;
+        // Determine file type from track size:
+        // - DSK files: 4096 bytes per track (16 sectors * 256 bytes)
+        // - NIC files: 8192 bytes per track (16 sectors * 512 bytes)
+        uint32_t offset;
+        if (trackSize == 8192) {
+            // NIC file format
+            const uint32_t NIC_BYTES_PER_TRACK = 16 * 512;  // 8192 bytes per track
+            offset = track * NIC_BYTES_PER_TRACK;
+        } else {
+            // DSK file format (default)
+            const uint32_t DSK_BYTES_PER_TRACK = 16 * 256;  // 4096 bytes per track
+            offset = track * DSK_BYTES_PER_TRACK;
+        }
         
         // Write track data at calculated offset
         return fat32->writeFileAtOffset(filename, offset, trackData, trackSize);

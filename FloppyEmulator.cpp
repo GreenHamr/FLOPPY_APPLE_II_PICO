@@ -759,7 +759,8 @@ uint8_t* FloppyEmulator::getDiskImage() {
 
 // Get disk image size
 uint32_t FloppyEmulator::getDiskImageSize() const {
-    return APPLE_II_DISK_SIZE;
+    // Return maximum size to support both DSK and NIC formats
+    return APPLE_II_MAX_DISK_SIZE;
 }
 
 // Update rotation position (simulate disk rotation)
@@ -960,6 +961,31 @@ static void writeAAVal(uint8_t val, uint8_t* buffer, uint32_t* index) {
 
 // Update GCR track cache for current track (Apple II NIC format)
 void FloppyEmulator::updateGCRTrackCache() {
+    // For NIC files, copy GCR data directly from diskImage buffer (already in GCR format)
+    if (currentFileType == DISK_FILE_TYPE_NIC) {
+        // NIC format: each track is 8192 bytes in file (16 sectors * 512 bytes)
+        // But we only use first 416 bytes from each sector = 6656 bytes per track
+        uint32_t trackOffsetInFile = currentTrack * APPLE_II_NIC_BYTES_PER_TRACK;  // Offset in NIC file (8192 bytes per track)
+        
+        // Copy 416 bytes from each of the 16 sectors directly to GCR cache
+        for (int sector = 0; sector < 16; sector++) {
+            uint32_t sectorOffsetInFile = trackOffsetInFile + (sector * 512);  // 512 bytes per sector in file
+            uint32_t sectorOffsetInCache = sector * 416;  // 416 bytes per sector in cache
+            
+            // Copy first 416 bytes from file sector to GCR cache
+            if (sectorOffsetInFile + 416 <= APPLE_II_NIC_DISK_SIZE && 
+                sectorOffsetInCache + 416 <= APPLE_II_GCR_BYTES_PER_TRACK) {
+                memcpy(gcrTrackCache + sectorOffsetInCache, diskImage + sectorOffsetInFile, 416);
+            }
+        }
+        
+        gcrTrackCacheTrack = currentTrack;
+        gcrTrackCacheBits = APPLE_II_GCR_BYTES_PER_TRACK * 8;
+        gcrTrackCacheDirty = false;  // Cache is clean after loading from buffer
+        return;
+    }
+    
+    // For DSK files, encode from diskImage buffer
     uint32_t gcrIndex = 0;
     uint32_t maxGcrBytes = APPLE_II_GCR_BYTES_PER_TRACK;
     uint8_t volume = 0xFE;  // Default volume
@@ -1102,7 +1128,8 @@ bool FloppyEmulator::getGCRTrackCacheDirty() {
 }
 // Save GCR cache back to disk image
 // Called before track change if the cache has been modified (dirty)
-// Decodes all 16 sectors from GCR cache and writes them to the disk image
+// For DSK files: Decodes all 16 sectors from GCR cache and writes them to the disk image
+// For NIC files: Saves GCR cache directly to diskImage buffer (already in GCR format)
 void FloppyEmulator::saveGCRCacheToDiskImage() {
     // Only save if cache is valid and dirty
     if (gcrTrackCacheTrack < 0 || gcrTrackCacheTrack >= APPLE_II_TRACKS || !gcrTrackCacheDirty) {
@@ -1110,8 +1137,57 @@ void FloppyEmulator::saveGCRCacheToDiskImage() {
     }
     
     //printf("saveGCRCacheToDiskImage\r\n");
-    printf("saveGCRCacheToDiskImage: Saving track %d to disk image...\r\n", gcrTrackCacheTrack);
+    printf("saveGCRCacheToDiskImage: Saving track %d...\r\n", gcrTrackCacheTrack);
     
+    // For NIC files, save GCR cache directly to diskImage buffer (no decoding needed)
+    if (currentFileType == DISK_FILE_TYPE_NIC) {
+        // NIC format: each track is 8192 bytes in file (16 sectors * 512 bytes)
+        // But we only use first 416 bytes from each sector = 6656 bytes per track
+        uint32_t trackOffsetInFile = gcrTrackCacheTrack * APPLE_II_NIC_BYTES_PER_TRACK;  // Offset in NIC file (8192 bytes per track)
+        
+        // Verify track offset is within bounds
+        if (trackOffsetInFile + APPLE_II_NIC_BYTES_PER_TRACK > APPLE_II_NIC_DISK_SIZE) {
+            printf("saveGCRCacheToDiskImage: Track %d offset out of bounds\r\n", gcrTrackCacheTrack);
+            gcrTrackCacheDirty = false;
+            return;
+        }
+        
+        // Copy 416 bytes from GCR cache to each of the 16 sectors in diskImage buffer
+        for (int sector = 0; sector < 16; sector++) {
+            uint32_t sectorOffsetInFile = trackOffsetInFile + (sector * 512);  // 512 bytes per sector in file
+            uint32_t sectorOffsetInCache = sector * 416;  // 416 bytes per sector in cache
+            
+            // Verify offsets are within bounds
+            if (sectorOffsetInFile + 512 > APPLE_II_NIC_DISK_SIZE) {
+                printf("saveGCRCacheToDiskImage: Sector %d offset out of bounds\r\n", sector);
+                continue;
+            }
+            if (sectorOffsetInCache + 416 > APPLE_II_GCR_BYTES_PER_TRACK) {
+                printf("saveGCRCacheToDiskImage: Sector %d cache offset out of bounds\r\n", sector);
+                continue;
+            }
+            
+            // Copy 416 bytes from cache to file buffer (first 416 bytes of each 512-byte sector)
+            memcpy(diskImage + sectorOffsetInFile, gcrTrackCache + sectorOffsetInCache, 416);
+            // Zero out last 96 bytes of each 512-byte sector to ensure clean data
+            memset(diskImage + sectorOffsetInFile + 416, 0, 96);
+        }
+        
+        //printf("saveGCRCacheToDiskImage: Saved NIC track %d to diskImage buffer (offset=%u)\r\n", 
+        //       gcrTrackCacheTrack, trackOffsetInFile);
+        
+        // Mark cache as clean
+        //uint32_t trackOffsetInFile = gcrTrackCacheTrack * APPLE_II_NIC_BYTES_PER_TRACK;
+        uint8_t* trackData = &diskImage[trackOffsetInFile];
+        uint32_t trackSize = APPLE_II_NIC_BYTES_PER_TRACK;  // 8192 bytes per track
+        
+        // Save track to file (silently fail if error occurs)
+        sdCardManager->saveTrackToFile(currentFileName, gcrTrackCacheTrack, trackData, trackSize);
+        gcrTrackCacheDirty = false;
+        return;
+    }
+    
+    // For DSK files, decode GCR cache and save to diskImage buffer
     // GCR cache sector structure (416 bytes per sector):
     // - 22 sync bytes (0xFF)
     // - 12 sync pattern bytes  

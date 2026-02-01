@@ -1119,6 +1119,27 @@ bool FAT32::writeFileAtOffset(const char* filename, uint32_t offset, const uint8
 }
 
 // List files in current directory
+// Structure to hold file entry for sorting
+// Using smaller name buffer (64 bytes) to save RAM - sufficient for most filenames
+struct FileEntry {
+    char name[64];
+    bool isDirectory;
+};
+
+// Case-insensitive string comparison for sorting
+static int strcasecmp_sort(const char* s1, const char* s2) {
+    while (*s1 && *s2) {
+        char c1 = (*s1 >= 'A' && *s1 <= 'Z') ? (*s1 + 32) : *s1;
+        char c2 = (*s2 >= 'A' && *s2 <= 'Z') ? (*s2 + 32) : *s2;
+        if (c1 != c2) {
+            return c1 - c2;
+        }
+        s1++;
+        s2++;
+    }
+    return *s1 - *s2;
+}
+
 // Helper function to check if file has allowed extension (case-insensitive)
 static bool hasAllowedExtension(const char* filename, const char* ext1, const char* ext2) {
     if (!filename) return false;
@@ -1160,14 +1181,16 @@ bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
     
     // Use static buffer to avoid stack overflow (16KB is too large for stack)
     static uint8_t clusterBuffer[512 * 32];
+    // Static array to hold file entries for sorting (max 64 entries, ~4KB total)
+    // Reduced from 256 to save RAM - sufficient for most directories
+    static FileEntry entries[64];
+    uint32_t entryCount = 0;
     uint32_t currentCluster = currentDirCluster;
-    uint32_t count = 0;
-    uint32_t listPos = 0;
     
-    // Search through root directory clusters
+    // First pass: collect all entries
     while (currentCluster >= FAT32_CLUSTER_RESERVED_MIN && 
            currentCluster <= FAT32_CLUSTER_RESERVED_MAX &&
-           listPos < maxSize - 64) {  // Leave room for entry
+           entryCount < 64) {  // Max 64 entries
         
         // Read cluster
         if (!readCluster(currentCluster, clusterBuffer)) {
@@ -1182,11 +1205,7 @@ bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
             // Check if entry is valid
             if (dirEntries[i].name[0] == 0x00) {
                 // End of directory
-                if (fileCount) {
-                    *fileCount = count;
-                }
-                fileList[listPos] = 0;
-                return true;
+                goto sort_and_format;
             }
             
             if (dirEntries[i].name[0] == 0xE5) {
@@ -1261,15 +1280,12 @@ bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
                 }
             }
             
-            // Add directory indicator
-            const char* typeStr = isDirectory ? " <DIR>" : "";
-            
-            // Add to list (filename only, no size)
-            int len = snprintf(fileList + listPos, maxSize - listPos, 
-                             "%s%s\r\n", filename, typeStr);
-            if (len > 0 && listPos + len < maxSize) {
-                listPos += len;
-                count++;
+            // Store entry for sorting
+            if (entryCount < 64) {
+                strncpy(entries[entryCount].name, filename, sizeof(entries[entryCount].name) - 1);
+                entries[entryCount].name[sizeof(entries[entryCount].name) - 1] = 0;
+                entries[entryCount].isDirectory = isDirectory;
+                entryCount++;
             }
         }
         
@@ -1281,8 +1297,47 @@ bool FAT32::listFiles(char* fileList, uint32_t maxSize, uint32_t* fileCount) {
         }
     }
     
+sort_and_format:
+    // Sort entries: directories first, then files, both alphabetically
+    // Simple bubble sort (efficient enough for small lists)
+    for (uint32_t i = 0; i < entryCount - 1; i++) {
+        for (uint32_t j = 0; j < entryCount - i - 1; j++) {
+            bool swap = false;
+            
+            // Directories come before files
+            if (entries[j].isDirectory && !entries[j + 1].isDirectory) {
+                swap = false;  // Already in correct order (dir before file)
+            } else if (!entries[j].isDirectory && entries[j + 1].isDirectory) {
+                swap = true;  // Need to swap (file before dir)
+            } else {
+                // Both are same type, sort alphabetically
+                if (strcasecmp_sort(entries[j].name, entries[j + 1].name) > 0) {
+                    swap = true;
+                }
+            }
+            
+            if (swap) {
+                // Swap entries
+                FileEntry temp = entries[j];
+                entries[j] = entries[j + 1];
+                entries[j + 1] = temp;
+            }
+        }
+    }
+    
+    // Format sorted entries into output string
+    uint32_t listPos = 0;
+    for (uint32_t i = 0; i < entryCount && listPos < maxSize - 64; i++) {
+        const char* typeStr = entries[i].isDirectory ? " <DIR>" : "";
+        int len = snprintf(fileList + listPos, maxSize - listPos, 
+                         "%s%s\r\n", entries[i].name, typeStr);
+        if (len > 0 && listPos + len < maxSize) {
+            listPos += len;
+        }
+    }
+    
     if (fileCount) {
-        *fileCount = count;
+        *fileCount = entryCount;
     }
     fileList[listPos] = 0;
     return true;
